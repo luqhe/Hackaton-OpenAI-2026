@@ -154,7 +154,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 - [x] `R1-18` Preservar denylist permanente de processos essenciais.
 - [x] `R1-19` Persistir estado local para reinício e operação offline.
 - [x] `R1-20` Implementar fila local de incidentes e telemetria durante indisponibilidade da API.
-- [ ] `R1-21` Garantir desbloqueio idempotente e recuperação após crash.
+- [x] `R1-21` Garantir desbloqueio idempotente e recuperação após crash.
 - [ ] `R1-22` Implementar heartbeat real com versão, permissões e saúde do agente.
 
 ## Épico 1.4 — Execução persistente e testes

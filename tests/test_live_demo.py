@@ -11,6 +11,7 @@ import agent.client as client_module
 import agent.main as agent_main
 from agent.client import GuardianAPIClient, GuardianAPIError
 from agent.outbox import PersistentOutbox
+from agent.state import AgentStateStore
 from api.main import create_app
 from guardian_core.config import Environment, GuardianSettings, LogLevel
 from guardian_core.models import RiskAssessment
@@ -266,15 +267,16 @@ def test_wait_for_unlock_reuses_existing_polling(monkeypatch, tmp_path) -> None:
     _, observer, client, enforcer = configure_live_fakes(monkeypatch, tmp_path, high_assessment())
     polling = []
 
-    def poll(*args):
+    def poll(*args, **kwargs):
         assert not observer.screenshot_path.exists()
-        polling.append(args)
+        polling.append((args, kwargs))
 
     monkeypatch.setattr(agent_main, "poll_commands", poll)
 
     assert agent_main.run_live_demo(live_args(tmp_path, wait_for_unlock=True)) == 0
 
-    assert polling == [(client, "device-demo", enforcer, 0)]
+    assert polling[0][0] == (client, "device-demo", enforcer, 0)
+    assert isinstance(polling[0][1]["state_store"], AgentStateStore)
 
 
 def test_png_client_uses_image_content_type(monkeypatch) -> None:

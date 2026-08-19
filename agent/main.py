@@ -90,6 +90,11 @@ def create_incident_or_queue(
         return None
 
 
+def runtime_state_store_for(args: argparse.Namespace) -> AgentStateStore:
+    default_path = args.state_path.with_name("runtime-state.json")
+    return AgentStateStore(getattr(args, "runtime_state_path", default_path))
+
+
 def load_fixture(path: Path) -> tuple[Observation, str]:
     payload = json.loads(path.read_text(encoding="utf-8"))
     observation = Observation(
@@ -176,7 +181,13 @@ def run_fixture(args: argparse.Namespace) -> int:
 
     if args.wait_for_unlock:
         print("Waiting for a parent decision. Press Ctrl+C to stop.")
-        poll_commands(client, args.device_id, enforcer, args.poll_interval)
+        poll_commands(
+            client,
+            args.device_id,
+            enforcer,
+            args.poll_interval,
+            state_store=runtime_state_store_for(args),
+        )
     return 0
 
 
@@ -255,7 +266,13 @@ def run_live_demo(args: argparse.Namespace) -> int:
         print(f"child_view={args.api_url}/child?incident={incident['id']}")
         if args.wait_for_unlock:
             print("Waiting for a parent decision. Press Ctrl+C to stop.")
-            poll_commands(client, args.device_id, enforcer, args.poll_interval)
+            poll_commands(
+                client,
+                args.device_id,
+                enforcer,
+                args.poll_interval,
+                state_store=runtime_state_store_for(args),
+            )
         return 0
     finally:
         temporary_capture.delete()
@@ -367,8 +384,10 @@ def poll_commands(
     enforcer: DemoEnforcer,
     poll_interval: float,
     once: bool = False,
+    state_store: AgentStateStore | None = None,
 ) -> None:
-    last_command_id = 0
+    runtime_state = state_store.load() if state_store is not None else None
+    last_command_id = runtime_state.last_command_id if runtime_state is not None else 0
     while True:
         enforcer.enforce()
         commands = client.pending_commands(device_id, last_command_id)
@@ -378,6 +397,9 @@ def poll_commands(
                 print(f"unlocked={command['application']} command={command['id']}")
             client.acknowledge_command(device_id, command["id"])
             last_command_id = max(last_command_id, command["id"])
+            if state_store is not None and runtime_state is not None:
+                runtime_state = runtime_state.update(last_command_id=last_command_id)
+                state_store.save(runtime_state)
         if once:
             return
         time.sleep(poll_interval)
@@ -467,6 +489,11 @@ def build_parser() -> argparse.ArgumentParser:
     poll.add_argument("--api-url", default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"))
     poll.add_argument("--device-id", default="device-demo")
     poll.add_argument("--state-path", type=Path, default=PROJECT_ROOT / ".data" / "agent-state.json")
+    poll.add_argument(
+        "--runtime-state-path",
+        type=Path,
+        default=PROJECT_ROOT / ".data" / "runtime-state.json",
+    )
     poll.add_argument("--poll-interval", type=float, default=2.0)
     poll.add_argument("--once", action="store_true")
     poll.add_argument("--real-enforcement", action="store_true")
@@ -475,7 +502,14 @@ def build_parser() -> argparse.ArgumentParser:
         settings = GuardianSettings.from_env()
         client = GuardianAPIClient(args.api_url)
         enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
-        poll_commands(client, args.device_id, enforcer, args.poll_interval, args.once)
+        poll_commands(
+            client,
+            args.device_id,
+            enforcer,
+            args.poll_interval,
+            args.once,
+            state_store=runtime_state_store_for(args),
+        )
         return 0
 
     poll.set_defaults(handler=handle_poll)
