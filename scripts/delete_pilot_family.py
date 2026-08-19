@@ -24,8 +24,11 @@ def main() -> int:
     parser = argparse.ArgumentParser(description="Delete one family from the local Guardian store")
     parser.add_argument("--database", type=Path, required=True)
     parser.add_argument("--evidence-directory", type=Path, required=True)
-    parser.add_argument("--family-id", required=True)
-    parser.add_argument("--confirm-family-id", required=True)
+    operation = parser.add_mutually_exclusive_group(required=True)
+    operation.add_argument("--family-id")
+    operation.add_argument("--resume-receipt")
+    parser.add_argument("--confirm-family-id")
+    parser.add_argument("--confirm-receipt-id")
     args = parser.parse_args()
 
     database = args.database.resolve()
@@ -33,8 +36,13 @@ def main() -> int:
     store = GuardianStore(database, evidence_directory)
     store.initialize()
     try:
-        receipt = delete_with_confirmation(store, args.family_id, args.confirm_family_id)
-    except (KeyError, ValueError, RuntimeError) as error:
+        if args.resume_receipt is not None:
+            if args.confirm_receipt_id != args.resume_receipt:
+                raise ValueError("--confirm-receipt-id must exactly match --resume-receipt")
+            receipt = store.resume_family_deletion(args.resume_receipt)
+        else:
+            receipt = delete_with_confirmation(store, args.family_id, args.confirm_family_id or "")
+    except (KeyError, OSError, ValueError, RuntimeError) as error:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
     print(receipt.model_dump_json(indent=2))

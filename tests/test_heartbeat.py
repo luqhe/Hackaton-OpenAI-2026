@@ -1,3 +1,5 @@
+from datetime import UTC, datetime, timedelta
+
 from fastapi.testclient import TestClient
 
 from api.main import create_app
@@ -49,3 +51,28 @@ def test_heartbeat_rejects_unknown_device_and_unbounded_queue(tmp_path) -> None:
 
     assert missing.status_code == 404
     assert invalid.status_code == 422
+
+
+def test_future_heartbeat_is_rejected_instead_of_appearing_fresh(tmp_path) -> None:
+    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/devices/device-demo/heartbeat",
+            json=heartbeat(observed_at=(datetime.now(UTC) + timedelta(minutes=5)).isoformat()),
+        )
+        metrics = client.get("/api/pilot/metrics").json()
+
+    assert response.status_code == 422
+    assert metrics["health_sample_count"] == 0
+
+
+def test_stale_heartbeat_marks_device_degraded(tmp_path) -> None:
+    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/devices/device-demo/heartbeat",
+            json=heartbeat(observed_at=(datetime.now(UTC) - timedelta(seconds=91)).isoformat()),
+        )
+
+    assert response.status_code == 200
+    assert response.json()["protection_status"] == "DEGRADED"

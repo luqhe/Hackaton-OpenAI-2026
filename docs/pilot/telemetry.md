@@ -21,12 +21,21 @@ Um evento registra progresso; não comprova consentimento válido, aprovação j
 ativa. O funil deve ser segmentado somente por coorte/versão autorizadas, sem inferir produtividade,
 comportamento da criança ou qualidade parental.
 
+Cada sessão começa em `STARTED`, percorre exatamente a ordem canônica e usa timestamps estritamente
+crescentes. A partir de `DEVICE_PAIRED`, o dispositivo é obrigatório e não pode mudar. Retry deve
+reutilizar a mesma idempotency key e o mesmo payload, incluindo `occurred_at`; pular etapas ou
+reutilizar a chave com dados diferentes é rejeitado.
+
 ## Saúde do agente
 
 Cada heartbeat persiste uma amostra técnica com versão, permissões, saúde do observer, fila,
 estado, horário observado e recebido. `GET /api/pilot/metrics?since_hours=24` retorna contagem de
 amostras, percentual `PROTECTED`, maior idade do heartbeat mais recente por dispositivo e fila
 máxima. Ausência de amostra resulta em `null`, nunca em saúde de 100%.
+
+`observed_at` exige timezone e aceita no máximo 30 segundos de clock skew futuro; valores além disso
+são rejeitados em vez de virarem idade zero. Heartbeat recebido com mais de 90 segundos já entra
+como `DEGRADED`, mesmo que permissões e observer sejam declarados saudáveis.
 
 ## Latência de comando
 

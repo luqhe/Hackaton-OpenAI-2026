@@ -16,6 +16,10 @@ transação de banco falhar, os arquivos são restaurados. Se a limpeza final fa
 `FAILED_STORAGE_CLEANUP` e alimenta a métrica operacional `family_deletion_failures`; a operação
 não pode ser declarada concluída.
 
+Se rollback do banco e restauração de um arquivo falharem juntos, o restore é best-effort e o
+receipt sempre termina `FAILED_DATABASE` com o staging preservado. O erro de banco permanece como
+causa e o erro de restore aparece no erro composto; nunca se deixa receipt `STARTED` silencioso.
+
 ## Receipt e minimização
 
 O receipt técnico retém apenas:
@@ -44,6 +48,20 @@ python scripts/delete_pilot_family.py \
 Depois, confirme receipt `COMPLETED`, ausência de linhas/arquivos e reinicie a API para verificar
 que o tombstone impede reseed. A operação é irreversível no storage local; recuperação só pode vir
 de backup sujeito à política aprovada.
+
+Uma limpeza interrompida pode ser retomada pelo ID exato do receipt:
+
+```bash
+python scripts/delete_pilot_family.py \
+  --database .data/guardian.db \
+  --evidence-directory .data/evidence \
+  --resume-receipt del-example \
+  --confirm-receipt-id del-example
+```
+
+Para `FAILED_STORAGE_CLEANUP`, a retomada destrói apenas os arquivos staged validados e marca
+`COMPLETED`. Para `FAILED_DATABASE`, ela restaura os arquivos ao evidence root e mantém o receipt
+falho para que uma nova exclusão seja iniciada conscientemente.
 
 ## Prova automatizada
 

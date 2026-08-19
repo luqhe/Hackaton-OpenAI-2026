@@ -1,5 +1,5 @@
 import sqlite3
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -63,16 +63,31 @@ def seed_family_scope(client: TestClient) -> tuple[str, str]:
             "offline_queue_depth": 0,
         },
     )
-    client.post(
-        "/api/pilot/onboarding-events",
-        json={
-            "child_id": "child-demo",
-            "device_id": "device-demo",
-            "session_id": "deletion-session-0001",
-            "stage": "SHADOW_READY",
-            "idempotency_key": "deletion-onboarding-proof-0001",
-        },
-    )
+    onboarding_started_at = datetime.now(UTC)
+    for index, stage in enumerate(
+        (
+            "STARTED",
+            "PRIVACY_REVIEWED",
+            "CONSENT_RECORDED",
+            "CHILD_PROFILE_CONFIGURED",
+            "DEVICE_PAIRED",
+            "PERMISSIONS_GRANTED",
+            "FIRST_HEALTHY_HEARTBEAT",
+            "SHADOW_READY",
+        )
+    ):
+        response = client.post(
+            "/api/pilot/onboarding-events",
+            json={
+                "child_id": "child-demo",
+                "device_id": "device-demo",
+                "session_id": "deletion-session-0001",
+                "stage": stage,
+                "occurred_at": (onboarding_started_at + timedelta(seconds=index)).isoformat(),
+                "idempotency_key": f"deletion-onboarding-{index:02d}",
+            },
+        )
+        assert response.status_code == 201
     client.post(f"/api/incidents/{incident['id']}/unlock")
     return incident["id"], evidence["id"]
 
@@ -98,7 +113,7 @@ def test_complete_family_deletion_covers_database_files_and_restart(tmp_path) ->
         assert receipt.counts.commands == 1
         assert receipt.counts.app_sessions == 1
         assert receipt.counts.daily_telemetry == 1
-        assert receipt.counts.onboarding_events == 1
+        assert receipt.counts.onboarding_events == 8
         assert receipt.counts.health_samples == 1
         assert not evidence_path.exists()
         assert client.get("/api/children/child-demo/policy").status_code == 404
@@ -190,3 +205,132 @@ def test_staging_failure_preserves_family_and_is_operationally_visible(monkeypat
         with sqlite3.connect(database) as connection:
             status = connection.execute("SELECT status FROM family_deletion_receipts").fetchone()[0]
         assert status == "FAILED_STORAGE_CLEANUP"
+
+
+def test_v1_database_migrates_family_id_to_not_null_cascading_foreign_key(tmp_path) -> None:
+    database = tmp_path / "legacy.db"
+    with sqlite3.connect(database) as connection:
+        connection.executescript(
+            """
+            CREATE TABLE children (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                created_at TEXT NOT NULL
+            );
+            INSERT INTO children(id, name, created_at)
+            VALUES ('child-demo', 'Lucas', '2026-08-19T00:00:00+00:00');
+            CREATE TABLE devices (
+                id TEXT PRIMARY KEY,
+                child_id TEXT NOT NULL REFERENCES children(id),
+                name TEXT NOT NULL,
+                platform TEXT NOT NULL,
+                paired_at TEXT NOT NULL,
+                last_seen_at TEXT,
+                protection_status TEXT NOT NULL DEFAULT 'PROTECTED'
+            );
+            INSERT INTO devices(
+                id, child_id, name, platform, paired_at, last_seen_at, protection_status
+            ) VALUES (
+                'device-demo', 'child-demo', 'Legacy Mac', 'macOS',
+                '2026-08-19T00:00:00+00:00', NULL, 'PROTECTED'
+            );
+            PRAGMA user_version = 1;
+            """
+        )
+
+    app = create_app(database, tmp_path / "evidence")
+    with TestClient(app):
+        pass
+
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        family_column = next(
+            row for row in connection.execute("PRAGMA table_info(children)") if row["name"] == "family_id"
+        )
+        family_foreign_key = next(
+            row
+            for row in connection.execute("PRAGMA foreign_key_list(children)")
+            if row["from"] == "family_id"
+        )
+        child = connection.execute("SELECT family_id FROM children WHERE id = 'child-demo'").fetchone()
+        device = connection.execute("SELECT child_id FROM devices WHERE id = 'device-demo'").fetchone()
+        violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+
+    assert family_column["notnull"] == 1
+    assert family_foreign_key["table"] == "families"
+    assert family_foreign_key["on_delete"] == "CASCADE"
+    assert child["family_id"] == "family-demo"
+    assert device["child_id"] == "child-demo"
+    assert violations == []
+
+
+def test_database_and_restore_failures_leave_terminal_resumable_receipt(monkeypatch, tmp_path) -> None:
+    database = tmp_path / "guardian.db"
+    evidence_directory = tmp_path / "evidence"
+    app = create_app(database, evidence_directory)
+    with TestClient(app) as client:
+        _, evidence_id = seed_family_scope(client)
+        evidence_path, _ = app.state.store.get_evidence(evidence_id)
+        original_replace = Path.replace
+
+        def fail_verification(*_args, **_kwargs) -> None:
+            raise RuntimeError("simulated database verification failure")
+
+        def fail_restore(path: Path, target: Path) -> Path:
+            if ".deletion-staging" in path.parts:
+                raise OSError("simulated restore failure")
+            return original_replace(path, target)
+
+        monkeypatch.setattr(app.state.store, "_verify_family_scope_removed", fail_verification)
+        monkeypatch.setattr(Path, "replace", fail_restore)
+        with pytest.raises(RuntimeError, match="rollback was incomplete") as error:
+            app.state.store.delete_family("family-demo")
+
+        assert isinstance(error.value.__cause__, RuntimeError)
+        assert app.state.store.child_exists("child-demo")
+        assert not evidence_path.exists()
+        with sqlite3.connect(database) as connection:
+            receipt_id, status, staging = connection.execute(
+                "SELECT id, status, staging_directory FROM family_deletion_receipts"
+            ).fetchone()
+        assert status == "FAILED_DATABASE"
+        assert staging is not None
+        assert Path(staging).is_dir()
+
+        monkeypatch.setattr(Path, "replace", original_replace)
+        receipt = app.state.store.resume_family_deletion(receipt_id)
+        assert receipt.status == "FAILED_DATABASE"
+        assert evidence_path.is_file()
+        assert not Path(staging).exists()
+
+
+def test_storage_cleanup_failure_can_resume_to_completion(monkeypatch, tmp_path) -> None:
+    database = tmp_path / "guardian.db"
+    evidence_directory = tmp_path / "evidence"
+    app = create_app(database, evidence_directory)
+    with TestClient(app) as client:
+        seed_family_scope(client)
+        original_unlink = Path.unlink
+
+        def fail_staged_unlink(path: Path, *args, **kwargs) -> None:
+            if ".deletion-staging" in path.parts:
+                raise OSError("simulated final cleanup failure")
+            original_unlink(path, *args, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", fail_staged_unlink)
+        with pytest.raises(RuntimeError, match="cleanup is incomplete"):
+            app.state.store.delete_family("family-demo")
+
+        assert not app.state.store.child_exists("child-demo")
+        with sqlite3.connect(database) as connection:
+            receipt_id, status, staging = connection.execute(
+                "SELECT id, status, staging_directory FROM family_deletion_receipts"
+            ).fetchone()
+        assert status == "FAILED_STORAGE_CLEANUP"
+        assert staging is not None
+
+        monkeypatch.setattr(Path, "unlink", original_unlink)
+        receipt = app.state.store.resume_family_deletion(receipt_id)
+        assert receipt.status == "COMPLETED"
+        assert receipt.completed_at is not None
+        assert not Path(staging).exists()

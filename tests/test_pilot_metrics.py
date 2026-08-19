@@ -5,6 +5,8 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 
+ONBOARDING_OCCURRED_AT = datetime.now(UTC).isoformat()
+
 
 def onboarding_payload(**overrides):
     payload = {
@@ -12,6 +14,7 @@ def onboarding_payload(**overrides):
         "device_id": "device-demo",
         "session_id": "session-pilot-0001",
         "stage": "STARTED",
+        "occurred_at": ONBOARDING_OCCURRED_AT,
         "idempotency_key": "onboarding-pilot-0001-started",
     }
     payload.update(overrides)
@@ -68,6 +71,14 @@ def test_onboarding_events_are_allowlisted_idempotent_and_aggregated(tmp_path) -
             "/api/pilot/onboarding-events",
             json=onboarding_payload(stage="PRIVACY_REVIEWED"),
         )
+        timestamp_mismatch = client.post(
+            "/api/pilot/onboarding-events",
+            json=onboarding_payload(
+                occurred_at=(
+                    datetime.fromisoformat(ONBOARDING_OCCURRED_AT) + timedelta(seconds=1)
+                ).isoformat()
+            ),
+        )
         rejected_content = client.post(
             "/api/pilot/onboarding-events",
             json=onboarding_payload(
@@ -82,6 +93,7 @@ def test_onboarding_events_are_allowlisted_idempotent_and_aggregated(tmp_path) -
     assert duplicate.headers["X-Guardian-Deduplicated"] == "true"
     assert duplicate.json()["id"] == created.json()["id"]
     assert conflicting_retry.status_code == 409
+    assert timestamp_mismatch.status_code == 409
     assert rejected_content.status_code == 422
     started = next(stage for stage in report["onboarding"] if stage["stage"] == "STARTED")
     assert started == {"stage": "STARTED", "event_count": 1, "unique_sessions": 1}
@@ -96,6 +108,66 @@ def test_onboarding_event_rejects_unknown_or_mismatched_device(tmp_path) -> None
         )
 
     assert unknown.status_code == 404
+
+
+def test_onboarding_requires_canonical_monotonic_progression(tmp_path) -> None:
+    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    base = datetime.now(UTC)
+    stages = [
+        "STARTED",
+        "PRIVACY_REVIEWED",
+        "CONSENT_RECORDED",
+        "CHILD_PROFILE_CONFIGURED",
+        "DEVICE_PAIRED",
+        "PERMISSIONS_GRANTED",
+        "FIRST_HEALTHY_HEARTBEAT",
+        "SHADOW_READY",
+    ]
+    with TestClient(app) as client:
+        direct_shadow = client.post(
+            "/api/pilot/onboarding-events",
+            json=onboarding_payload(
+                session_id="session-direct-shadow",
+                stage="SHADOW_READY",
+                idempotency_key="direct-shadow-is-invalid",
+                occurred_at=base.isoformat(),
+            ),
+        )
+        responses = []
+        for index, stage in enumerate(stages):
+            responses.append(
+                client.post(
+                    "/api/pilot/onboarding-events",
+                    json=onboarding_payload(
+                        session_id="session-canonical-0001",
+                        stage=stage,
+                        idempotency_key=f"canonical-stage-{index:02d}",
+                        occurred_at=(base + timedelta(seconds=index)).isoformat(),
+                    ),
+                )
+            )
+        non_monotonic = client.post(
+            "/api/pilot/onboarding-events",
+            json=onboarding_payload(
+                session_id="session-monotonic-0001",
+                idempotency_key="monotonic-start-0001",
+                occurred_at=base.isoformat(),
+            ),
+        )
+        assert non_monotonic.status_code == 201
+        non_monotonic = client.post(
+            "/api/pilot/onboarding-events",
+            json=onboarding_payload(
+                session_id="session-monotonic-0001",
+                stage="PRIVACY_REVIEWED",
+                idempotency_key="monotonic-privacy-0001",
+                occurred_at=(base - timedelta(seconds=1)).isoformat(),
+            ),
+        )
+
+    assert direct_shadow.status_code == 409
+    assert [response.status_code for response in responses] == [201] * len(stages)
+    assert non_monotonic.status_code == 409
 
 
 def test_heartbeat_health_and_command_ack_latency_are_reported(tmp_path) -> None:

@@ -52,7 +52,7 @@ CREATE TABLE IF NOT EXISTS families (
 
 CREATE TABLE IF NOT EXISTS children (
     id TEXT PRIMARY KEY,
-    family_id TEXT NOT NULL REFERENCES families(id),
+    family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
     name TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -223,12 +223,8 @@ class GuardianStore:
                     f"Database schema version {current_version} is newer than supported version {SCHEMA_VERSION}"
                 )
             connection.executescript(SCHEMA)
-            child_columns = {
-                row["name"] for row in connection.execute("PRAGMA table_info(children)").fetchall()
-            }
-            if "family_id" not in child_columns:
-                connection.execute("ALTER TABLE children ADD COLUMN family_id TEXT")
             now = _now_iso()
+            self._ensure_family_schema(connection, now)
             demo_reference = self._family_reference("family-demo")
             demo_deleted = connection.execute(
                 """
@@ -277,7 +273,76 @@ class GuardianStore:
                         ("child-demo", category, action, RiskLevel.HIGH, confidence),
                     )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
+            connection.execute("CREATE INDEX IF NOT EXISTS idx_children_family ON children(family_id)")
+            violations = connection.execute("PRAGMA foreign_key_check").fetchall()
+            if violations:
+                raise RuntimeError("Database migration left foreign-key violations")
             connection.execute("PRAGMA optimize")
+
+    @staticmethod
+    def _ensure_family_schema(connection: sqlite3.Connection, now: str) -> None:
+        columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(children)").fetchall()}
+        has_family_id = "family_id" in columns
+        if has_family_id:
+            family_ids = [
+                row["family_id"]
+                for row in connection.execute(
+                    "SELECT DISTINCT family_id FROM children WHERE family_id IS NOT NULL"
+                ).fetchall()
+            ]
+            for family_id in family_ids:
+                connection.execute(
+                    "INSERT OR IGNORE INTO families(id, name, created_at) VALUES (?, ?, ?)",
+                    (family_id, "Migrated family", now),
+                )
+        connection.execute(
+            "INSERT OR IGNORE INTO families(id, name, created_at) VALUES (?, ?, ?)",
+            ("family-demo", "Família Demo", now),
+        )
+
+        family_foreign_key = next(
+            (
+                row
+                for row in connection.execute("PRAGMA foreign_key_list(children)").fetchall()
+                if row["from"] == "family_id" and row["table"] == "families"
+            ),
+            None,
+        )
+        needs_rebuild = (
+            not has_family_id
+            or columns["family_id"]["notnull"] != 1
+            or family_foreign_key is None
+            or family_foreign_key["on_delete"].upper() != "CASCADE"
+        )
+        if not needs_rebuild:
+            return
+
+        family_expression = "COALESCE(family_id, 'family-demo')" if has_family_id else "'family-demo'"
+        connection.commit()
+        connection.execute("PRAGMA foreign_keys = OFF")
+        try:
+            connection.execute("DROP TABLE IF EXISTS children_v3")
+            connection.execute(
+                """
+                CREATE TABLE children_v3 (
+                    id TEXT PRIMARY KEY,
+                    family_id TEXT NOT NULL REFERENCES families(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL,
+                    created_at TEXT NOT NULL
+                )
+                """
+            )
+            connection.execute(
+                f"""
+                INSERT INTO children_v3(id, family_id, name, created_at)
+                SELECT id, {family_expression}, name, created_at FROM children
+                """
+            )
+            connection.execute("DROP TABLE children")
+            connection.execute("ALTER TABLE children_v3 RENAME TO children")
+            connection.commit()
+        finally:
+            connection.execute("PRAGMA foreign_keys = ON")
 
     @staticmethod
     def _family_reference(family_id: str) -> str:
@@ -333,10 +398,13 @@ class GuardianStore:
                 raise KeyError(device_id)
 
     def record_heartbeat(self, device_id: str, heartbeat: DeviceHeartbeat) -> Device:
+        received_at = datetime.now(UTC)
+        heartbeat_age = (received_at - heartbeat.observed_at).total_seconds()
         healthy = (
             heartbeat.screen_recording_permission
             and heartbeat.accessibility_permission
             and heartbeat.observer_healthy
+            and heartbeat_age <= 90
         )
         protection_status = "PROTECTED" if healthy else "DEGRADED"
         with self.connect() as connection:
@@ -363,7 +431,7 @@ class GuardianStore:
                     heartbeat.offline_queue_depth,
                     protection_status,
                     heartbeat.observed_at.isoformat(),
-                    _now_iso(),
+                    received_at.isoformat(),
                 ),
             )
         return self.get_device(device_id)
@@ -384,6 +452,59 @@ class GuardianStore:
                     raise KeyError(event.device_id)
                 if device["child_id"] != event.child_id:
                     raise ValueError("Onboarding device does not belong to child")
+
+            existing = connection.execute(
+                """
+                SELECT id, child_id, device_id, session_id, stage, occurred_at
+                FROM pilot_onboarding_events WHERE idempotency_key = ?
+                """,
+                (event.idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                if (
+                    existing["child_id"] != event.child_id
+                    or existing["device_id"] != event.device_id
+                    or existing["session_id"] != event.session_id
+                    or existing["stage"] != event.stage
+                    or datetime.fromisoformat(existing["occurred_at"]) != event.occurred_at
+                ):
+                    raise ValueError("Onboarding idempotency key was reused with a different event")
+                event_id = existing["id"]
+                created = False
+                return self.get_onboarding_event(event_id), created
+
+            session_rows = connection.execute(
+                """
+                SELECT child_id, device_id, stage, occurred_at
+                FROM pilot_onboarding_events
+                WHERE session_id = ?
+                ORDER BY created_at, id
+                """,
+                (event.session_id,),
+            ).fetchall()
+            canonical_stages = list(PilotOnboardingStage)
+            recorded_stages = [PilotOnboardingStage(row["stage"]) for row in session_rows]
+            if recorded_stages != canonical_stages[: len(recorded_stages)]:
+                raise ValueError("Onboarding session contains a non-canonical stage sequence")
+            if len(recorded_stages) >= len(canonical_stages):
+                raise ValueError("Onboarding session is already complete")
+            expected_stage = canonical_stages[len(recorded_stages)]
+            if event.stage != expected_stage:
+                raise ValueError(f"Onboarding stage {event.stage} is invalid; expected {expected_stage}")
+            if session_rows:
+                if any(row["child_id"] != event.child_id for row in session_rows):
+                    raise ValueError("Onboarding session cannot change child")
+                latest_occurred_at = datetime.fromisoformat(session_rows[-1]["occurred_at"])
+                if event.occurred_at <= latest_occurred_at:
+                    raise ValueError("Onboarding occurred_at must increase monotonically")
+                established_devices = {
+                    row["device_id"] for row in session_rows if row["device_id"] is not None
+                }
+                if established_devices and event.device_id not in established_devices:
+                    raise ValueError("Onboarding session cannot change or remove its device")
+            device_required_from = canonical_stages.index(PilotOnboardingStage.DEVICE_PAIRED)
+            if len(recorded_stages) >= device_required_from and event.device_id is None:
+                raise ValueError(f"Onboarding stage {event.stage} requires a device")
             try:
                 connection.execute(
                     """
@@ -406,7 +527,7 @@ class GuardianStore:
             except sqlite3.IntegrityError as error:
                 existing = connection.execute(
                     """
-                    SELECT id, child_id, device_id, session_id, stage
+                    SELECT id, child_id, device_id, session_id, stage, occurred_at
                     FROM pilot_onboarding_events WHERE idempotency_key = ?
                     """,
                     (event.idempotency_key,),
@@ -418,6 +539,7 @@ class GuardianStore:
                     or existing["device_id"] != event.device_id
                     or existing["session_id"] != event.session_id
                     or existing["stage"] != event.stage
+                    or datetime.fromisoformat(existing["occurred_at"]) != event.occurred_at
                 ):
                     raise ValueError(
                         "Onboarding idempotency key was reused with a different event"
@@ -502,6 +624,43 @@ class GuardianStore:
                     receipt_id,
                 ),
             )
+
+    def _verify_family_scope_removed(
+        self,
+        connection: sqlite3.Connection,
+        family_id: str,
+        child_ids: list[str],
+        device_ids: list[str],
+        incident_ids: list[str],
+    ) -> None:
+        remaining: dict[str, int] = {}
+
+        def count_for_ids(table: str, column: str, values: list[str]) -> int:
+            if not values:
+                return 0
+            return int(
+                connection.execute(
+                    f"SELECT COUNT(*) AS total FROM {table} WHERE {column} IN ({self._placeholders(values)})",
+                    values,
+                ).fetchone()["total"]
+            )
+
+        remaining["families"] = int(
+            connection.execute(
+                "SELECT COUNT(*) AS total FROM families WHERE id = ?", (family_id,)
+            ).fetchone()["total"]
+        )
+        for table in ("children", "policies", "app_sessions", "daily_telemetry", "pilot_onboarding_events"):
+            remaining[table] = count_for_ids(table, "child_id" if table != "children" else "id", child_ids)
+        remaining["devices"] = count_for_ids("devices", "id", device_ids)
+        remaining["agent_health_samples"] = count_for_ids("agent_health_samples", "device_id", device_ids)
+        remaining["device_commands"] = count_for_ids("device_commands", "device_id", device_ids)
+        remaining["incidents"] = count_for_ids("incidents", "id", incident_ids)
+        remaining["incident_evidence"] = count_for_ids("incident_evidence", "incident_id", incident_ids)
+        orphaned = {table: total for table, total in remaining.items() if total}
+        if orphaned:
+            summary = ", ".join(f"{table}={total}" for table, total in sorted(orphaned.items()))
+            raise RuntimeError(f"Family deletion verification found remaining records: {summary}")
 
     def get_family_deletion_receipt(self, receipt_id: str) -> FamilyDeletionReceipt:
         with self.connect() as connection:
@@ -665,20 +824,41 @@ class GuardianStore:
                     connection.execute(f"DELETE FROM devices WHERE child_id IN ({placeholders})", child_ids)
                     connection.execute(f"DELETE FROM children WHERE id IN ({placeholders})", child_ids)
                 connection.execute("DELETE FROM families WHERE id = ?", (family_id,))
+                self._verify_family_scope_removed(
+                    connection,
+                    family_id,
+                    child_ids,
+                    device_ids,
+                    incident_ids,
+                )
                 connection.execute(
                     "UPDATE family_deletion_receipts SET status = ? WHERE id = ?",
                     (FamilyDeletionStatus.DATABASE_DELETED, receipt_id),
                 )
-        except Exception:
+        except Exception as database_error:
+            restore_errors: list[OSError] = []
             for source, staged in staged_files:
                 if staged.is_file():
-                    staged.replace(source)
+                    try:
+                        staged.replace(source)
+                    except OSError as restore_error:
+                        restore_errors.append(restore_error)
             if staging_directory.is_dir():
                 try:
                     staging_directory.rmdir()
                 except OSError:
                     pass
-            self._set_deletion_status(receipt_id, FamilyDeletionStatus.FAILED_DATABASE)
+            self._set_deletion_status(
+                receipt_id,
+                FamilyDeletionStatus.FAILED_DATABASE,
+                staging_directory=staging_directory if staging_directory.exists() else None,
+            )
+            if restore_errors:
+                error_types = ", ".join(type(error).__name__ for error in restore_errors)
+                raise RuntimeError(
+                    "Family database deletion failed and evidence rollback was incomplete "
+                    f"({len(restore_errors)} restore error(s): {error_types})"
+                ) from database_error
             raise
 
         try:
@@ -704,6 +884,78 @@ class GuardianStore:
             receipt_id,
             FamilyDeletionStatus.COMPLETED,
             completed_at=_now_iso(),
+        )
+        return self.get_family_deletion_receipt(receipt_id)
+
+    def resume_family_deletion(self, receipt_id: str) -> FamilyDeletionReceipt:
+        """Resume staged cleanup, or restore evidence after a rolled-back DB deletion."""
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT status, staging_directory
+                FROM family_deletion_receipts WHERE id = ?
+                """,
+                (receipt_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(receipt_id)
+        status = FamilyDeletionStatus(row["status"])
+        if status == FamilyDeletionStatus.COMPLETED:
+            return self.get_family_deletion_receipt(receipt_id)
+        if status not in {
+            FamilyDeletionStatus.DATABASE_DELETED,
+            FamilyDeletionStatus.FAILED_DATABASE,
+            FamilyDeletionStatus.FAILED_STORAGE_CLEANUP,
+        }:
+            raise ValueError(f"Deletion receipt {receipt_id} cannot resume from {status}")
+
+        evidence_root = self.evidence_directory.resolve()
+        staging_root = (evidence_root / ".deletion-staging").resolve()
+        configured_staging = row["staging_directory"]
+        if configured_staging is None:
+            if status == FamilyDeletionStatus.FAILED_DATABASE:
+                return self.get_family_deletion_receipt(receipt_id)
+            self._set_deletion_status(
+                receipt_id,
+                FamilyDeletionStatus.COMPLETED,
+                completed_at=_now_iso(),
+            )
+            return self.get_family_deletion_receipt(receipt_id)
+
+        staging_directory = Path(configured_staging).resolve()
+        if staging_directory.parent != staging_root or staging_directory.name != receipt_id:
+            raise ValueError("Deletion receipt staging directory is outside the configured staging root")
+
+        entries = list(staging_directory.iterdir()) if staging_directory.is_dir() else []
+        for entry in entries:
+            if entry.is_symlink() or not entry.is_file() or entry.resolve().parent != staging_directory:
+                raise ValueError("Deletion staging contains an unsupported entry")
+
+        if status == FamilyDeletionStatus.FAILED_DATABASE:
+            for staged in entries:
+                destination = evidence_root / staged.name
+                if destination.exists():
+                    raise FileExistsError(f"Refusing to overwrite restored evidence {destination.name}")
+                staged.replace(destination)
+            terminal_status = FamilyDeletionStatus.FAILED_DATABASE
+            completed_at = None
+        else:
+            for staged in entries:
+                staged.unlink()
+            terminal_status = FamilyDeletionStatus.COMPLETED
+            completed_at = _now_iso()
+
+        if staging_directory.is_dir():
+            staging_directory.rmdir()
+        if staging_root.is_dir():
+            try:
+                staging_root.rmdir()
+            except OSError:
+                pass
+        self._set_deletion_status(
+            receipt_id,
+            terminal_status,
+            completed_at=completed_at,
         )
         return self.get_family_deletion_receipt(receipt_id)
 

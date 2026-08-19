@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated
 
@@ -206,6 +206,14 @@ class DeviceHeartbeat(BaseModel):
     offline_queue_depth: Annotated[int, Field(ge=0, le=1000)] = 0
     observed_at: datetime = Field(default_factory=utc_now)
 
+    @model_validator(mode="after")
+    def validate_observed_at(self) -> DeviceHeartbeat:
+        if self.observed_at.utcoffset() is None:
+            raise ValueError("Heartbeat observed_at must include a timezone")
+        if self.observed_at > utc_now() + timedelta(seconds=30):
+            raise ValueError("Heartbeat observed_at exceeds the 30-second clock-skew allowance")
+        return self
+
 
 class PilotOnboardingEventCreate(BaseModel):
     """Allowlisted funnel event. It intentionally has no arbitrary metadata/content field."""
@@ -218,6 +226,12 @@ class PilotOnboardingEventCreate(BaseModel):
     stage: PilotOnboardingStage
     occurred_at: datetime = Field(default_factory=utc_now)
     idempotency_key: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_occurred_at(self) -> PilotOnboardingEventCreate:
+        if self.occurred_at.utcoffset() is None:
+            raise ValueError("Onboarding occurred_at must include a timezone")
+        return self
 
 
 class PilotOnboardingEvent(BaseModel):
