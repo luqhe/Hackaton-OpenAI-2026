@@ -2,6 +2,7 @@ from scripts.validate_pilot_readiness import (
     activation_blockers,
     validate_legal_package,
     validate_protocol,
+    validate_support_training,
 )
 
 
@@ -25,3 +26,8 @@ def test_activation_gate_stays_closed_until_real_approvals_are_recorded() -> Non
         "PRIVACY",
         "PRODUCT_SAFETY",
     }
+    assert "support training roster is not complete" in blockers
+
+
+def test_support_training_is_complete_but_roster_is_honestly_pending() -> None:
+    assert validate_support_training() == []

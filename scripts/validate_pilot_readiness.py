@@ -97,6 +97,41 @@ def validate_legal_package() -> list[str]:
     return errors
 
 
+def validate_support_training() -> list[str]:
+    errors: list[str] = []
+    config_path = ROOT / "config/pilot/support-training.v1.json"
+    curriculum_path = ROOT / "docs/pilot/support-training.md"
+    quick_reference_path = ROOT / "docs/pilot/support-quick-reference.md"
+    for path in (config_path, curriculum_path, quick_reference_path):
+        if not path.is_file():
+            errors.append(f"missing support training artifact: {path.relative_to(ROOT)}")
+    if errors:
+        return errors
+
+    training = _load_json("config/pilot/support-training.v1.json")
+    if training.get("schema_version") != 1:
+        errors.append("support training schema_version must be 1")
+    if training.get("training_complete") is not False:
+        errors.append("support training cannot be complete without a real roster")
+    if training.get("completions") != []:
+        errors.append("support training must not contain fabricated completions")
+    if training.get("passing_score_percent", 0) < 85:
+        errors.append("support training passing score must be at least 85%")
+    if len(training.get("required_modules", [])) != 6:
+        errors.append("support training must contain six required modules")
+    if len(training.get("must_pass_scenarios", [])) != 5:
+        errors.append("support training must contain five must-pass scenarios")
+
+    curriculum = curriculum_path.read_text(encoding="utf-8")
+    for module in training.get("required_modules", []):
+        if module.split("-", 2)[0] + "-" + module.split("-", 2)[1] not in curriculum:
+            errors.append(f"curriculum is missing module {module}")
+    for marker in ("não significa que o suporte foi treinado", "SEV0", "kill switch", "85%"):
+        if marker not in curriculum:
+            errors.append(f"support curriculum is missing marker {marker}")
+    return errors
+
+
 def activation_blockers() -> list[str]:
     blockers: list[str] = []
     protocol = _load_json("config/pilot/protocol.v1.json")
@@ -108,6 +143,9 @@ def activation_blockers() -> list[str]:
     for role, record in approvals.get("required_approvals", {}).items():
         if record.get("status") != "APPROVED":
             blockers.append(f"{role} approval is {record.get('status', 'MISSING')}")
+    training = _load_json("config/pilot/support-training.v1.json")
+    if training.get("training_complete") is not True:
+        blockers.append("support training roster is not complete")
     return blockers
 
 
@@ -119,7 +157,7 @@ def main() -> int:
         help="fail unless all external approvals and pilot enablement are recorded",
     )
     args = parser.parse_args()
-    errors = validate_protocol() + validate_legal_package()
+    errors = validate_protocol() + validate_legal_package() + validate_support_training()
     if errors:
         for error in errors:
             print(f"ERROR: {error}")
