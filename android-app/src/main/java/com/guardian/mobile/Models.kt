@@ -5,6 +5,7 @@ data class Device(
     val name: String,
     val platform: String,
     val protectionStatus: String,
+    val lastSeenAt: String?,
 )
 
 data class Incident(
