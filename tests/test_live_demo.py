@@ -315,7 +315,7 @@ def test_png_client_uses_image_content_type(monkeypatch) -> None:
 
 def test_png_evidence_is_accessible_from_existing_route(tmp_path) -> None:
     app = create_app(settings=development_settings(tmp_path))
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Guardian-Demo": "true"}) as client:
         incident = client.post("/api/incidents", json=incident_payload()).json()
         uploaded = client.post(
             f"/api/incidents/{incident['id']}/evidence",

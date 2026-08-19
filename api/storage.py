@@ -6,15 +6,17 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from guardian_core.config import Environment
 from guardian_core.identity import (
     Account,
     AccountStatus,
+    Child,
     DeviceLifecycleStatus,
     Family,
+    FamilyScope,
     FamilyStatus,
     Membership,
     MembershipRole,
@@ -101,6 +103,8 @@ CREATE TABLE IF NOT EXISTS devices (
     last_seen_at TEXT,
     lifecycle_status TEXT NOT NULL DEFAULT 'ACTIVE'
         CHECK (lifecycle_status IN ('ACTIVE', 'REVOKED')),
+    protection_status TEXT NOT NULL DEFAULT 'DEGRADED'
+        CHECK (protection_status IN ('PROTECTED', 'DEGRADED')),
     UNIQUE(family_id, id),
     UNIQUE(family_id, child_id, id),
     FOREIGN KEY (family_id, child_id)
@@ -359,9 +363,10 @@ class GuardianStore:
                 """
                 INSERT INTO devices(
                     id, family_id, child_id, name, platform, paired_at, last_seen_at,
-                    lifecycle_status
+                    lifecycle_status, protection_status
                 )
-                SELECT id, ?, child_id, name, platform, paired_at, last_seen_at, 'ACTIVE'
+                SELECT id, ?, child_id, name, platform, paired_at, last_seen_at,
+                    'ACTIVE', protection_status
                 FROM devices_legacy
                 """,
                 (DEMO_FAMILY_ID,),
@@ -521,7 +526,7 @@ class GuardianStore:
                 "MacBook Pro",
                 "macOS",
                 now,
-                now,
+                None,
                 DeviceLifecycleStatus.ACTIVE,
             ),
         )
@@ -722,42 +727,291 @@ class GuardianStore:
             ).fetchone()
         return self._membership_from_row(revoked)
 
-    def child_exists(self, child_id: str) -> bool:
+    def get_login_credentials(self, email: str) -> tuple[str, str, bool] | None:
         with self.connect() as connection:
-            return (
-                connection.execute("SELECT 1 FROM children WHERE id = ?", (child_id,)).fetchone() is not None
+            row = connection.execute(
+                """
+                SELECT id, password_hash, auth_enabled
+                FROM accounts
+                WHERE email = ? AND status = 'ACTIVE'
+                """,
+                (email.strip().casefold(),),
+            ).fetchone()
+        if row is None or row["password_hash"] is None:
+            return None
+        return row["id"], row["password_hash"], bool(row["auth_enabled"])
+
+    def active_family_scope(self, account_id: str, family_id: str | None = None) -> FamilyScope | None:
+        sql = """
+            SELECT membership.id AS membership_id, membership.family_id, membership.role
+            FROM memberships membership
+            JOIN accounts account ON account.id = membership.account_id
+            JOIN families family ON family.id = membership.family_id
+            WHERE membership.account_id = ?
+              AND membership.status = 'ACTIVE'
+              AND account.status = 'ACTIVE'
+              AND family.status = 'ACTIVE'
+        """
+        parameters: list[str] = [account_id]
+        if family_id is not None:
+            sql += " AND membership.family_id = ?"
+            parameters.append(family_id)
+        sql += " ORDER BY membership.created_at, membership.id LIMIT 1"
+        with self.connect() as connection:
+            row = connection.execute(sql, parameters).fetchone()
+        if row is None:
+            return None
+        return FamilyScope(
+            account_id=account_id,
+            family_id=row["family_id"],
+            membership_id=row["membership_id"],
+            role=row["role"],
+        )
+
+    def create_auth_session(
+        self,
+        scope: FamilyScope,
+        *,
+        token_hash: str,
+        csrf_hash: str,
+        expires_at: datetime,
+    ) -> str:
+        session_id = f"session-{uuid.uuid4().hex[:16]}"
+        now = _now_iso()
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO auth_sessions(
+                    id, token_hash, csrf_hash, account_id, family_id, membership_id,
+                    created_at, expires_at, last_seen_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    session_id,
+                    token_hash,
+                    csrf_hash,
+                    scope.account_id,
+                    scope.family_id,
+                    scope.membership_id,
+                    now,
+                    expires_at.isoformat(),
+                    now,
+                ),
+            )
+        return session_id
+
+    def resolve_family_scope(self, token_hash: str) -> FamilyScope | None:
+        now = _now_iso()
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT session.account_id, session.family_id, session.membership_id,
+                       membership.role
+                FROM auth_sessions session
+                JOIN accounts account ON account.id = session.account_id
+                JOIN families family ON family.id = session.family_id
+                JOIN memberships membership
+                  ON membership.id = session.membership_id
+                 AND membership.account_id = session.account_id
+                 AND membership.family_id = session.family_id
+                WHERE session.token_hash = ?
+                  AND session.revoked_at IS NULL
+                  AND session.expires_at > ?
+                  AND account.status = 'ACTIVE'
+                  AND family.status = 'ACTIVE'
+                  AND membership.status = 'ACTIVE'
+                """,
+                (token_hash, now),
+            ).fetchone()
+            if row is not None:
+                connection.execute(
+                    "UPDATE auth_sessions SET last_seen_at = ? WHERE token_hash = ?",
+                    (now, token_hash),
+                )
+        if row is None:
+            return None
+        return FamilyScope(
+            account_id=row["account_id"],
+            family_id=row["family_id"],
+            membership_id=row["membership_id"],
+            role=row["role"],
+        )
+
+    def auth_session_csrf_hash(self, token_hash: str) -> str | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT csrf_hash FROM auth_sessions
+                WHERE token_hash = ? AND revoked_at IS NULL AND expires_at > ?
+                """,
+                (token_hash, _now_iso()),
+            ).fetchone()
+        return row["csrf_hash"] if row is not None else None
+
+    def revoke_auth_session(self, token_hash: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE auth_sessions SET revoked_at = ?
+                WHERE token_hash = ? AND revoked_at IS NULL
+                """,
+                (_now_iso(), token_hash),
             )
 
-    def _family_for_child(self, child_id: str) -> str:
+    def revoke_account_sessions(self, account_id: str) -> None:
         with self.connect() as connection:
-            row = connection.execute(
-                "SELECT family_id FROM children WHERE id = ?",
-                (child_id,),
-            ).fetchone()
-        if row is None:
-            raise KeyError(child_id)
-        return row["family_id"]
+            connection.execute(
+                """
+                UPDATE auth_sessions SET revoked_at = ?
+                WHERE account_id = ? AND revoked_at IS NULL
+                """,
+                (_now_iso(), account_id),
+            )
 
-    def _device_identity(self, device_id: str) -> tuple[str, str]:
+    def login_attempt_count(self, identifier_hash: str, window: timedelta) -> int:
+        cutoff = (datetime.now(UTC) - window).isoformat()
+        with self.connect() as connection:
+            connection.execute("DELETE FROM login_attempts WHERE attempted_at < ?", (cutoff,))
+            row = connection.execute(
+                "SELECT COUNT(*) AS total FROM login_attempts WHERE identifier_hash = ?",
+                (identifier_hash,),
+            ).fetchone()
+        return row["total"]
+
+    def record_login_attempt(self, identifier_hash: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO login_attempts(identifier_hash, attempted_at) VALUES (?, ?)",
+                (identifier_hash, _now_iso()),
+            )
+
+    def clear_login_attempts(self, identifier_hash: str) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "DELETE FROM login_attempts WHERE identifier_hash = ?",
+                (identifier_hash,),
+            )
+
+    def account_id_for_recovery(self, email: str) -> str | None:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT family_id, child_id FROM devices WHERE id = ?",
-                (device_id,),
+                """
+                SELECT id FROM accounts
+                WHERE email = ? AND status = 'ACTIVE' AND auth_enabled = 1
+                """,
+                (email.strip().casefold(),),
+            ).fetchone()
+        return row["id"] if row is not None else None
+
+    def create_password_reset_token(
+        self,
+        account_id: str,
+        token_hash: str,
+        expires_at: datetime,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                "UPDATE password_reset_tokens SET used_at = ? WHERE account_id = ? AND used_at IS NULL",
+                (_now_iso(), account_id),
+            )
+            connection.execute(
+                """
+                INSERT INTO password_reset_tokens(
+                    id, account_id, token_hash, created_at, expires_at
+                ) VALUES (?, ?, ?, ?, ?)
+                """,
+                (
+                    f"reset-{uuid.uuid4().hex[:16]}",
+                    account_id,
+                    token_hash,
+                    _now_iso(),
+                    expires_at.isoformat(),
+                ),
+            )
+
+    def consume_password_reset_token(self, token_hash: str, password_hash: str) -> bool:
+        now = _now_iso()
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, account_id FROM password_reset_tokens
+                WHERE token_hash = ? AND used_at IS NULL AND expires_at > ?
+                """,
+                (token_hash, now),
+            ).fetchone()
+            if row is None:
+                return False
+            connection.execute(
+                "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
+                (now, row["id"]),
+            )
+            connection.execute(
+                "UPDATE accounts SET password_hash = ? WHERE id = ? AND auth_enabled = 1",
+                (password_hash, row["account_id"]),
+            )
+            connection.execute(
+                """
+                UPDATE auth_sessions SET revoked_at = ?
+                WHERE account_id = ? AND revoked_at IS NULL
+                """,
+                (now, row["account_id"]),
+            )
+        return True
+
+    def create_child(self, family_id: str, name: str) -> Child:
+        child_id = f"child-{uuid.uuid4().hex[:16]}"
+        now = _now_iso()
+        with self.connect() as connection:
+            connection.execute(
+                "INSERT INTO children(id, family_id, name, created_at) VALUES (?, ?, ?, ?)",
+                (child_id, family_id, name.strip(), now),
+            )
+        return Child(id=child_id, family_id=family_id, name=name.strip(), created_at=now)
+
+    def list_children(self, family_id: str) -> list[Child]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT id, family_id, name, created_at
+                FROM children WHERE family_id = ? ORDER BY created_at
+                """,
+                (family_id,),
+            ).fetchall()
+        return [Child(**dict(row)) for row in rows]
+
+    def child_exists(self, family_id: str, child_id: str) -> bool:
+        with self.connect() as connection:
+            return (
+                connection.execute(
+                    "SELECT 1 FROM children WHERE family_id = ? AND id = ?",
+                    (family_id, child_id),
+                ).fetchone()
+                is not None
+            )
+
+    def _device_child(self, family_id: str, device_id: str) -> str:
+        with self.connect() as connection:
+            row = connection.execute(
+                "SELECT child_id FROM devices WHERE family_id = ? AND id = ?",
+                (family_id, device_id),
             ).fetchone()
         if row is None:
             raise KeyError(device_id)
-        return row["family_id"], row["child_id"]
+        return row["child_id"]
 
-    def device_exists(self, device_id: str) -> bool:
+    def device_exists(self, family_id: str, device_id: str) -> bool:
         with self.connect() as connection:
             return (
-                connection.execute("SELECT 1 FROM devices WHERE id = ?", (device_id,)).fetchone() is not None
+                connection.execute(
+                    "SELECT 1 FROM devices WHERE family_id = ? AND id = ?",
+                    (family_id, device_id),
+                ).fetchone()
+                is not None
             )
 
-    def pair_device(self, request: DevicePairRequest) -> Device:
+    def pair_device(self, family_id: str, request: DevicePairRequest) -> Device:
         device_id = f"device-{uuid.uuid4().hex[:12]}"
         now = _now_iso()
-        family_id = self._family_for_child(request.child_id)
         with self.connect() as connection:
             connection.execute(
                 """
@@ -773,15 +1027,18 @@ class GuardianStore:
                     request.device_name,
                     request.platform,
                     now,
-                    now,
+                    None,
                     DeviceLifecycleStatus.ACTIVE,
                 ),
             )
-        return self.get_device(device_id)
+        return self.get_device(family_id, device_id)
 
-    def get_device(self, device_id: str) -> Device:
+    def get_device(self, family_id: str, device_id: str) -> Device:
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM devices WHERE id = ?", (device_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM devices WHERE family_id = ? AND id = ?",
+                (family_id, device_id),
+            ).fetchone()
         if row is None:
             raise KeyError(device_id)
         return Device(
@@ -793,23 +1050,35 @@ class GuardianStore:
             paired_at=row["paired_at"],
             last_seen_at=row["last_seen_at"],
             lifecycle_status=row["lifecycle_status"],
-            protection_status=(
-                "PROTECTED"
-                if row["lifecycle_status"] == DeviceLifecycleStatus.ACTIVE and row["last_seen_at"]
-                else "DEGRADED"
-            ),
+            protection_status=row["protection_status"],
         )
 
-    def touch_device(self, device_id: str) -> None:
+    def list_devices(self, family_id: str) -> list[Device]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                "SELECT id FROM devices WHERE family_id = ? ORDER BY paired_at",
+                (family_id,),
+            ).fetchall()
+        return [self.get_device(family_id, row["id"]) for row in rows]
+
+    def touch_device(self, family_id: str, device_id: str) -> None:
         with self.connect() as connection:
             cursor = connection.execute(
-                "UPDATE devices SET last_seen_at = ? WHERE id = ? AND lifecycle_status = 'ACTIVE'",
-                (_now_iso(), device_id),
+                """
+                UPDATE devices SET last_seen_at = ?
+                WHERE family_id = ? AND id = ? AND lifecycle_status = 'ACTIVE'
+                """,
+                (_now_iso(), family_id, device_id),
             )
             if cursor.rowcount == 0:
                 raise KeyError(device_id)
 
-    def record_heartbeat(self, device_id: str, heartbeat: DeviceHeartbeat) -> Device:
+    def record_heartbeat(
+        self,
+        family_id: str,
+        device_id: str,
+        heartbeat: DeviceHeartbeat,
+    ) -> Device:
         healthy = (
             heartbeat.screen_recording_permission
             and heartbeat.accessibility_permission
@@ -818,23 +1087,33 @@ class GuardianStore:
         protection_status = "PROTECTED" if healthy else "DEGRADED"
         with self.connect() as connection:
             cursor = connection.execute(
-                "UPDATE devices SET last_seen_at = ?, protection_status = ? WHERE id = ?",
-                (heartbeat.observed_at.isoformat(), protection_status, device_id),
+                """
+                UPDATE devices SET last_seen_at = ?, protection_status = ?
+                WHERE family_id = ? AND id = ? AND lifecycle_status = 'ACTIVE'
+                """,
+                (
+                    heartbeat.observed_at.isoformat(),
+                    protection_status,
+                    family_id,
+                    device_id,
+                ),
             )
             if cursor.rowcount == 0:
                 raise KeyError(device_id)
-        return self.get_device(device_id)
+        return self.get_device(family_id, device_id)
 
-    def get_policy(self, child_id: str) -> list[PolicyRule]:
+    def get_policy(self, family_id: str, child_id: str) -> list[PolicyRule]:
         with self.connect() as connection:
             rows = connection.execute(
-                "SELECT category, action, minimum_risk, minimum_confidence FROM policies WHERE child_id = ? ORDER BY category",
-                (child_id,),
+                """
+                SELECT category, action, minimum_risk, minimum_confidence
+                FROM policies WHERE family_id = ? AND child_id = ? ORDER BY category
+                """,
+                (family_id, child_id),
             ).fetchall()
         return [PolicyRule(**dict(row)) for row in rows]
 
-    def replace_policy(self, child_id: str, rules: list[PolicyRule]) -> list[PolicyRule]:
-        family_id = self._family_for_child(child_id)
+    def replace_policy(self, family_id: str, child_id: str, rules: list[PolicyRule]) -> list[PolicyRule]:
         with self.connect() as connection:
             connection.execute(
                 "DELETE FROM policies WHERE family_id = ? AND child_id = ?",
@@ -858,15 +1137,15 @@ class GuardianStore:
                     for rule in rules
                 ],
             )
-        return self.get_policy(child_id)
+        return self.get_policy(family_id, child_id)
 
-    def create_incident(self, request: IncidentCreate) -> tuple[Incident, bool]:
+    def create_incident(self, family_id: str, request: IncidentCreate) -> tuple[Incident, bool]:
         if request.assessment.category is None or request.assessment.direction is None:
             raise ValueError("SAFE assessments cannot create incidents")
 
-        family_id, device_child_id = self._device_identity(request.device_id)
-        if device_child_id != request.child_id or family_id != self._family_for_child(request.child_id):
-            raise ValueError("Incident child and device must belong to the same family")
+        device_child_id = self._device_child(family_id, request.device_id)
+        if device_child_id != request.child_id or not self.child_exists(family_id, request.child_id):
+            raise KeyError(request.child_id)
 
         incident_id = f"inc-{uuid.uuid4().hex[:16]}"
         status = (
@@ -910,8 +1189,11 @@ class GuardianStore:
                 connection.execute(insert_sql, values(request.deduplication_key))
             except sqlite3.IntegrityError as error:
                 duplicate = connection.execute(
-                    "SELECT id, status FROM incidents WHERE device_id = ? AND deduplication_key = ?",
-                    (request.device_id, request.deduplication_key),
+                    """
+                    SELECT id, status FROM incidents
+                    WHERE family_id = ? AND device_id = ? AND deduplication_key = ?
+                    """,
+                    (family_id, request.device_id, request.deduplication_key),
                 ).fetchone()
                 if duplicate is None:
                     raise error
@@ -922,7 +1204,7 @@ class GuardianStore:
                 else:
                     incident_id = duplicate["id"]
                     created = False
-        return self.get_incident(incident_id), created
+        return self.get_incident(family_id, incident_id), created
 
     def _incident_from_row(self, row: sqlite3.Row, screenshot_urls: list[str]) -> Incident:
         return Incident(
@@ -946,12 +1228,18 @@ class GuardianStore:
             updated_at=row["updated_at"],
         )
 
-    def get_incident(self, incident_id: str) -> Incident:
+    def get_incident(self, family_id: str, incident_id: str) -> Incident:
         with self.connect() as connection:
-            row = connection.execute("SELECT * FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            row = connection.execute(
+                "SELECT * FROM incidents WHERE family_id = ? AND id = ?",
+                (family_id, incident_id),
+            ).fetchone()
             evidence_rows = connection.execute(
-                "SELECT id FROM incident_evidence WHERE incident_id = ? ORDER BY created_at",
-                (incident_id,),
+                """
+                SELECT id FROM incident_evidence
+                WHERE family_id = ? AND incident_id = ? ORDER BY created_at
+                """,
+                (family_id, incident_id),
             ).fetchall()
         if row is None:
             raise KeyError(incident_id)
@@ -959,10 +1247,12 @@ class GuardianStore:
         return self._incident_from_row(row, urls)
 
     def list_incidents(
-        self, child_id: str, limit: int, status: IncidentStatus | None = None
+        self, family_id: str, child_id: str, limit: int, status: IncidentStatus | None = None
     ) -> list[Incident]:
-        sql = "SELECT id FROM incidents WHERE child_id = ?"
-        parameters: list[object] = [child_id]
+        if not self.child_exists(family_id, child_id):
+            raise KeyError(child_id)
+        sql = "SELECT id FROM incidents WHERE family_id = ? AND child_id = ?"
+        parameters: list[object] = [family_id, child_id]
         if status is not None:
             sql += " AND status = ?"
             parameters.append(status)
@@ -970,11 +1260,14 @@ class GuardianStore:
         parameters.append(limit)
         with self.connect() as connection:
             rows = connection.execute(sql, parameters).fetchall()
-        return [self.get_incident(row["id"]) for row in rows]
+        return [self.get_incident(family_id, row["id"]) for row in rows]
 
-    def request_unlock(self, incident_id: str, explanation: str) -> Incident:
+    def request_unlock(self, family_id: str, incident_id: str, explanation: str) -> Incident:
         with self.connect() as connection:
-            row = connection.execute("SELECT status FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            row = connection.execute(
+                "SELECT status FROM incidents WHERE family_id = ? AND id = ?",
+                (family_id, incident_id),
+            ).fetchone()
             if row is None:
                 raise KeyError(incident_id)
             if row["status"] not in (IncidentStatus.BLOCKED, IncidentStatus.UNLOCK_REQUESTED):
@@ -983,28 +1276,34 @@ class GuardianStore:
                 """
                 UPDATE incidents
                 SET status = ?, child_explanation = ?, updated_at = ?
-                WHERE id = ?
+                WHERE family_id = ? AND id = ?
                 """,
-                (IncidentStatus.UNLOCK_REQUESTED, explanation, _now_iso(), incident_id),
+                (IncidentStatus.UNLOCK_REQUESTED, explanation, _now_iso(), family_id, incident_id),
             )
-        return self.get_incident(incident_id)
+        return self.get_incident(family_id, incident_id)
 
-    def unlock_incident(self, incident_id: str) -> Incident:
+    def unlock_incident(self, family_id: str, incident_id: str) -> Incident:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT family_id, status, device_id, application FROM incidents WHERE id = ?",
-                (incident_id,),
+                """
+                SELECT family_id, status, device_id, application FROM incidents
+                WHERE family_id = ? AND id = ?
+                """,
+                (family_id, incident_id),
             ).fetchone()
             if row is None:
                 raise KeyError(incident_id)
             if row["status"] == IncidentStatus.UNLOCKED:
-                return self.get_incident(incident_id)
+                return self.get_incident(family_id, incident_id)
             if row["status"] not in (IncidentStatus.BLOCKED, IncidentStatus.UNLOCK_REQUESTED):
                 raise ValueError(f"Cannot unlock incident from status {row['status']}")
             now = _now_iso()
             connection.execute(
-                "UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?",
-                (IncidentStatus.UNLOCKED, now, incident_id),
+                """
+                UPDATE incidents SET status = ?, updated_at = ?
+                WHERE family_id = ? AND id = ?
+                """,
+                (IncidentStatus.UNLOCKED, now, family_id, incident_id),
             )
             connection.execute(
                 """
@@ -1022,30 +1321,39 @@ class GuardianStore:
                     now,
                 ),
             )
-        return self.get_incident(incident_id)
+        return self.get_incident(family_id, incident_id)
 
-    def keep_blocked(self, incident_id: str) -> Incident:
+    def keep_blocked(self, family_id: str, incident_id: str) -> Incident:
         with self.connect() as connection:
-            row = connection.execute("SELECT status FROM incidents WHERE id = ?", (incident_id,)).fetchone()
+            row = connection.execute(
+                "SELECT status FROM incidents WHERE family_id = ? AND id = ?",
+                (family_id, incident_id),
+            ).fetchone()
             if row is None:
                 raise KeyError(incident_id)
             if row["status"] not in (IncidentStatus.BLOCKED, IncidentStatus.UNLOCK_REQUESTED):
                 raise ValueError(f"Cannot keep blocked from status {row['status']}")
             connection.execute(
-                "UPDATE incidents SET status = ?, updated_at = ? WHERE id = ?",
-                (IncidentStatus.KEPT_BLOCKED, _now_iso(), incident_id),
+                """
+                UPDATE incidents SET status = ?, updated_at = ?
+                WHERE family_id = ? AND id = ?
+                """,
+                (IncidentStatus.KEPT_BLOCKED, _now_iso(), family_id, incident_id),
             )
-        return self.get_incident(incident_id)
+        return self.get_incident(family_id, incident_id)
 
-    def save_evidence(self, incident_id: str, data: bytes, content_type: str) -> str:
-        incident = self.get_incident(incident_id)
+    def save_evidence(self, family_id: str, incident_id: str, data: bytes, content_type: str) -> str:
+        incident = self.get_incident(family_id, incident_id)
         suffixes = {"image/png": ".png", "image/jpeg": ".jpg", "image/webp": ".webp", "text/plain": ".txt"}
         suffix = suffixes[content_type]
         digest = hashlib.sha256(data).hexdigest()
         with self.connect() as connection:
             existing = connection.execute(
-                "SELECT id FROM incident_evidence WHERE incident_id = ? AND sha256 = ?",
-                (incident_id, digest),
+                """
+                SELECT id FROM incident_evidence
+                WHERE family_id = ? AND incident_id = ? AND sha256 = ?
+                """,
+                (family_id, incident_id, digest),
             ).fetchone()
         if existing is not None:
             return existing["id"]
@@ -1075,11 +1383,14 @@ class GuardianStore:
             raise
         return evidence_id
 
-    def get_evidence(self, evidence_id: str) -> tuple[Path, str]:
+    def get_evidence(self, family_id: str, evidence_id: str) -> tuple[Path, str]:
         with self.connect() as connection:
             row = connection.execute(
-                "SELECT file_path, content_type FROM incident_evidence WHERE id = ?",
-                (evidence_id,),
+                """
+                SELECT file_path, content_type FROM incident_evidence
+                WHERE family_id = ? AND id = ?
+                """,
+                (family_id, evidence_id),
             ).fetchone()
         if row is None:
             raise KeyError(evidence_id)
@@ -1089,35 +1400,46 @@ class GuardianStore:
             raise FileNotFoundError(evidence_id)
         return path, row["content_type"]
 
-    def pending_commands(self, device_id: str, after_id: int) -> list[DeviceCommand]:
-        self.touch_device(device_id)
+    def pending_commands(self, family_id: str, device_id: str, after_id: int) -> list[DeviceCommand]:
+        if not self.device_exists(family_id, device_id):
+            raise KeyError(device_id)
         with self.connect() as connection:
             rows = connection.execute(
                 """
                 SELECT id, device_id, incident_id, command_type AS type, application, status,
                        created_at, acknowledged_at
                 FROM device_commands
-                WHERE device_id = ? AND status = ? AND id > ?
+                WHERE family_id = ? AND device_id = ? AND status = ? AND id > ?
                 ORDER BY id
                 """,
-                (device_id, CommandStatus.PENDING, after_id),
+                (family_id, device_id, CommandStatus.PENDING, after_id),
             ).fetchall()
         return [DeviceCommand(**dict(row)) for row in rows]
 
-    def acknowledge_command(self, device_id: str, command_id: int) -> DeviceCommand:
+    def acknowledge_command(self, family_id: str, device_id: str, command_id: int) -> DeviceCommand:
         with self.connect() as connection:
             cursor = connection.execute(
                 """
                 UPDATE device_commands
                 SET status = ?, acknowledged_at = ?
-                WHERE id = ? AND device_id = ? AND status = ?
+                WHERE family_id = ? AND id = ? AND device_id = ? AND status = ?
                 """,
-                (CommandStatus.ACKNOWLEDGED, _now_iso(), command_id, device_id, CommandStatus.PENDING),
+                (
+                    CommandStatus.ACKNOWLEDGED,
+                    _now_iso(),
+                    family_id,
+                    command_id,
+                    device_id,
+                    CommandStatus.PENDING,
+                ),
             )
             if cursor.rowcount == 0:
                 existing = connection.execute(
-                    "SELECT 1 FROM device_commands WHERE id = ? AND device_id = ?",
-                    (command_id, device_id),
+                    """
+                    SELECT 1 FROM device_commands
+                    WHERE family_id = ? AND id = ? AND device_id = ?
+                    """,
+                    (family_id, command_id, device_id),
                 ).fetchone()
                 if existing is None:
                     raise KeyError(command_id)
@@ -1125,17 +1447,16 @@ class GuardianStore:
                 """
                 SELECT id, device_id, incident_id, command_type AS type, application, status,
                        created_at, acknowledged_at
-                FROM device_commands WHERE id = ?
+                FROM device_commands WHERE family_id = ? AND id = ?
                 """,
-                (command_id,),
+                (family_id, command_id),
             ).fetchone()
         return DeviceCommand(**dict(row))
 
-    def record_telemetry(self, device_id: str, update: TelemetryUpdate) -> None:
-        family_id, child_id = self._device_identity(device_id)
+    def record_telemetry(self, family_id: str, device_id: str, update: TelemetryUpdate) -> None:
+        child_id = self._device_child(family_id, device_id)
         if update.child_id != child_id:
             raise ValueError("Telemetry child must match the paired device")
-        self.touch_device(device_id)
         observed_date = update.observed_at.date().isoformat()
         with self.connect() as connection:
             if update.app_name and update.session_seconds:
@@ -1174,9 +1495,8 @@ class GuardianStore:
                 ),
             )
 
-    def daily_report(self, child_id: str, report_date: date) -> DailyReport:
+    def daily_report(self, family_id: str, child_id: str, report_date: date) -> DailyReport:
         date_value = report_date.isoformat()
-        family_id = self._family_for_child(child_id)
         with self.connect() as connection:
             child = connection.execute(
                 "SELECT name FROM children WHERE family_id = ? AND id = ?",

@@ -51,7 +51,7 @@ def incident_payload() -> dict:
 
 def test_complete_incident_unlock_command_flow(tmp_path) -> None:
     app = create_app(settings=demo_settings(tmp_path))
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Guardian-Demo": "true"}) as client:
         assert client.get("/api/health").status_code == 200
 
         created = client.post("/api/incidents", json=incident_payload())
@@ -104,7 +104,7 @@ def test_complete_incident_unlock_command_flow(tmp_path) -> None:
 
 def test_policy_and_daily_report(tmp_path) -> None:
     app = create_app(settings=demo_settings(tmp_path))
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Guardian-Demo": "true"}) as client:
         rules = client.get("/api/children/child-demo/policy").json()
         assert len(rules) == 4
         rules[0]["action"] = "ALERT"
@@ -122,7 +122,7 @@ def test_policy_and_daily_report(tmp_path) -> None:
             },
         )
         assert telemetry.status_code == 204
-        report = client.get("/api/daily-report").json()
+        report = client.get("/api/daily-report?child_id=child-demo").json()
         assert report["screen_changes"] == 4
         assert report["total_seconds"] == 120
 
@@ -138,6 +138,6 @@ def test_safe_assessment_cannot_create_incident(tmp_path) -> None:
         "evidence": [],
         "explanation": "No risk.",
     }
-    with TestClient(app) as client:
+    with TestClient(app, headers={"X-Guardian-Demo": "true"}) as client:
         response = client.post("/api/incidents", json=payload)
         assert response.status_code == 422
