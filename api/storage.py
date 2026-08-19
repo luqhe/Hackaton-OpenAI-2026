@@ -6,7 +6,7 @@ import sqlite3
 import uuid
 from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import UTC, date, datetime
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from guardian_core.models import (
@@ -22,6 +22,11 @@ from guardian_core.models import (
     Incident,
     IncidentCreate,
     IncidentStatus,
+    PilotFunnelStageMetric,
+    PilotMetricsReport,
+    PilotOnboardingEvent,
+    PilotOnboardingEventCreate,
+    PilotOnboardingStage,
     PolicyAction,
     PolicyRule,
     RiskCategory,
@@ -120,6 +125,30 @@ CREATE TABLE IF NOT EXISTS daily_telemetry (
     PRIMARY KEY (child_id, observed_date)
 );
 
+CREATE TABLE IF NOT EXISTS pilot_onboarding_events (
+    id TEXT PRIMARY KEY,
+    child_id TEXT NOT NULL REFERENCES children(id) ON DELETE CASCADE,
+    device_id TEXT REFERENCES devices(id) ON DELETE CASCADE,
+    session_id TEXT NOT NULL,
+    stage TEXT NOT NULL,
+    occurred_at TEXT NOT NULL,
+    idempotency_key TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS agent_health_samples (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL REFERENCES devices(id) ON DELETE CASCADE,
+    agent_version TEXT NOT NULL,
+    screen_recording_permission INTEGER NOT NULL,
+    accessibility_permission INTEGER NOT NULL,
+    observer_healthy INTEGER NOT NULL,
+    offline_queue_depth INTEGER NOT NULL,
+    protection_status TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    received_at TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_child_occurred
 ON incidents(child_id, occurred_at DESC);
 
@@ -135,6 +164,12 @@ ON app_sessions(child_id, observed_date);
 
 CREATE UNIQUE INDEX IF NOT EXISTS idx_evidence_incident_sha256
 ON incident_evidence(incident_id, sha256);
+
+CREATE INDEX IF NOT EXISTS idx_pilot_onboarding_stage_time
+ON pilot_onboarding_events(stage, occurred_at);
+
+CREATE INDEX IF NOT EXISTS idx_agent_health_device_received
+ON agent_health_samples(device_id, received_at DESC);
 """
 
 
@@ -262,7 +297,188 @@ class GuardianStore:
             )
             if cursor.rowcount == 0:
                 raise KeyError(device_id)
+            connection.execute(
+                """
+                INSERT INTO agent_health_samples(
+                    device_id, agent_version, screen_recording_permission,
+                    accessibility_permission, observer_healthy, offline_queue_depth,
+                    protection_status, observed_at, received_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    device_id,
+                    heartbeat.agent_version,
+                    heartbeat.screen_recording_permission,
+                    heartbeat.accessibility_permission,
+                    heartbeat.observer_healthy,
+                    heartbeat.offline_queue_depth,
+                    protection_status,
+                    heartbeat.observed_at.isoformat(),
+                    _now_iso(),
+                ),
+            )
         return self.get_device(device_id)
+
+    def record_onboarding_event(self, event: PilotOnboardingEventCreate) -> tuple[PilotOnboardingEvent, bool]:
+        event_id = f"onb-{uuid.uuid4().hex[:16]}"
+        created_at = _now_iso()
+        created = True
+        with self.connect() as connection:
+            child = connection.execute("SELECT 1 FROM children WHERE id = ?", (event.child_id,)).fetchone()
+            if child is None:
+                raise KeyError(event.child_id)
+            if event.device_id is not None:
+                device = connection.execute(
+                    "SELECT child_id FROM devices WHERE id = ?", (event.device_id,)
+                ).fetchone()
+                if device is None:
+                    raise KeyError(event.device_id)
+                if device["child_id"] != event.child_id:
+                    raise ValueError("Onboarding device does not belong to child")
+            try:
+                connection.execute(
+                    """
+                    INSERT INTO pilot_onboarding_events(
+                        id, child_id, device_id, session_id, stage, occurred_at,
+                        idempotency_key, created_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        event_id,
+                        event.child_id,
+                        event.device_id,
+                        event.session_id,
+                        event.stage,
+                        event.occurred_at.isoformat(),
+                        event.idempotency_key,
+                        created_at,
+                    ),
+                )
+            except sqlite3.IntegrityError as error:
+                existing = connection.execute(
+                    """
+                    SELECT id, child_id, device_id, session_id, stage
+                    FROM pilot_onboarding_events WHERE idempotency_key = ?
+                    """,
+                    (event.idempotency_key,),
+                ).fetchone()
+                if existing is None:
+                    raise
+                if (
+                    existing["child_id"] != event.child_id
+                    or existing["device_id"] != event.device_id
+                    or existing["session_id"] != event.session_id
+                    or existing["stage"] != event.stage
+                ):
+                    raise ValueError(
+                        "Onboarding idempotency key was reused with a different event"
+                    ) from error
+                event_id = existing["id"]
+                created = False
+        return self.get_onboarding_event(event_id), created
+
+    def get_onboarding_event(self, event_id: str) -> PilotOnboardingEvent:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, child_id, device_id, session_id, stage, occurred_at, created_at
+                FROM pilot_onboarding_events WHERE id = ?
+                """,
+                (event_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(event_id)
+        return PilotOnboardingEvent(**dict(row))
+
+    @staticmethod
+    def _percentile(values: list[float], percentile: float) -> float | None:
+        if not values:
+            return None
+        ordered = sorted(values)
+        index = max(0, min(len(ordered) - 1, int((len(ordered) * percentile) + 0.999999) - 1))
+        return round(ordered[index], 3)
+
+    def pilot_metrics(self, since_hours: int) -> PilotMetricsReport:
+        generated_at = datetime.now(UTC)
+        window_started_at = generated_at - timedelta(hours=since_hours)
+        window_start = window_started_at.isoformat()
+        with self.connect() as connection:
+            funnel_rows = connection.execute(
+                """
+                SELECT stage, COUNT(*) AS event_count,
+                       COUNT(DISTINCT session_id) AS unique_sessions
+                FROM pilot_onboarding_events
+                WHERE occurred_at >= ?
+                GROUP BY stage
+                """,
+                (window_start,),
+            ).fetchall()
+            health_rows = connection.execute(
+                """
+                SELECT device_id, protection_status, offline_queue_depth, observed_at
+                FROM agent_health_samples
+                WHERE received_at >= ?
+                ORDER BY received_at
+                """,
+                (window_start,),
+            ).fetchall()
+            command_rows = connection.execute(
+                """
+                SELECT created_at, acknowledged_at
+                FROM device_commands
+                WHERE acknowledged_at IS NOT NULL AND created_at >= ?
+                """,
+                (window_start,),
+            ).fetchall()
+
+        funnel_by_stage = {row["stage"]: dict(row) for row in funnel_rows}
+        onboarding = [
+            PilotFunnelStageMetric(
+                stage=stage,
+                event_count=funnel_by_stage.get(stage, {}).get("event_count", 0),
+                unique_sessions=funnel_by_stage.get(stage, {}).get("unique_sessions", 0),
+            )
+            for stage in PilotOnboardingStage
+        ]
+        healthy_count = sum(row["protection_status"] == "PROTECTED" for row in health_rows)
+        health_percent = round((healthy_count / len(health_rows)) * 100, 3) if health_rows else None
+        latest_by_device: dict[str, datetime] = {}
+        for row in health_rows:
+            observed_at = datetime.fromisoformat(row["observed_at"])
+            if observed_at.tzinfo is None:
+                observed_at = observed_at.replace(tzinfo=UTC)
+            current = latest_by_device.get(row["device_id"])
+            if current is None or observed_at > current:
+                latest_by_device[row["device_id"]] = observed_at
+        heartbeat_ages = [
+            max(0.0, (generated_at - value).total_seconds()) for value in latest_by_device.values()
+        ]
+        latencies_ms = [
+            max(
+                0.0,
+                (
+                    datetime.fromisoformat(row["acknowledged_at"]) - datetime.fromisoformat(row["created_at"])
+                ).total_seconds()
+                * 1000,
+            )
+            for row in command_rows
+        ]
+        return PilotMetricsReport(
+            window_started_at=window_started_at,
+            generated_at=generated_at,
+            onboarding=onboarding,
+            health_sample_count=len(health_rows),
+            healthy_health_sample_count=healthy_count,
+            agent_health_percent=health_percent,
+            heartbeat_age_max_seconds=round(max(heartbeat_ages), 3) if heartbeat_ages else None,
+            offline_queue_depth_max=(
+                max(row["offline_queue_depth"] for row in health_rows) if health_rows else None
+            ),
+            command_ack_count=len(latencies_ms),
+            command_ack_latency_p50_ms=self._percentile(latencies_ms, 0.50),
+            command_ack_latency_p95_ms=self._percentile(latencies_ms, 0.95),
+            command_ack_latency_max_ms=round(max(latencies_ms), 3) if latencies_ms else None,
+        )
 
     def get_policy(self, child_id: str) -> list[PolicyRule]:
         with self.connect() as connection:

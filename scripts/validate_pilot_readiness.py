@@ -179,6 +179,36 @@ def validate_operational_readiness() -> list[str]:
     return errors
 
 
+def validate_telemetry_instrumentation() -> list[str]:
+    errors: list[str] = []
+    config_path = ROOT / "config/pilot/telemetry.v1.json"
+    document_path = ROOT / "docs/pilot/telemetry.md"
+    if not config_path.is_file():
+        return ["missing pilot telemetry configuration"]
+    if not document_path.is_file():
+        return ["missing pilot telemetry document"]
+    telemetry = _load_json("config/pilot/telemetry.v1.json")
+    if telemetry.get("schema_version") != 1:
+        errors.append("pilot telemetry schema_version must be 1")
+    forbidden = set(telemetry.get("content_fields_forbidden", []))
+    if not {"visible_text", "ocr", "screenshot", "transcript", "evidence"}.issubset(forbidden):
+        errors.append("pilot telemetry must explicitly forbid observed content fields")
+    if len(telemetry.get("onboarding_stages", [])) != 8:
+        errors.append("pilot telemetry must define eight onboarding stages")
+    command_latency = telemetry.get("command_latency", {})
+    if command_latency.get("start") != "device_commands.created_at":
+        errors.append("command latency must start at persisted command creation")
+    if command_latency.get("end") != "device_commands.acknowledged_at":
+        errors.append("command latency must end at persisted agent acknowledgement")
+    if command_latency.get("slo_p95_ms") != 5000:
+        errors.append("command latency p95 SLO must match the five-second release gate")
+    document = document_path.read_text(encoding="utf-8")
+    for marker in ("R5-05", "null", "p50", "p95", "não comprova consentimento"):
+        if marker not in document:
+            errors.append(f"pilot telemetry document is missing marker {marker}")
+    return errors
+
+
 def activation_blockers() -> list[str]:
     blockers: list[str] = []
     protocol = _load_json("config/pilot/protocol.v1.json")
@@ -215,6 +245,7 @@ def main() -> int:
         + validate_legal_package()
         + validate_support_training()
         + validate_operational_readiness()
+        + validate_telemetry_instrumentation()
     )
     if errors:
         for error in errors:

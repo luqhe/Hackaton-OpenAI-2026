@@ -61,6 +61,17 @@ class CommandStatus(StrEnum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
 
 
+class PilotOnboardingStage(StrEnum):
+    STARTED = "STARTED"
+    PRIVACY_REVIEWED = "PRIVACY_REVIEWED"
+    CONSENT_RECORDED = "CONSENT_RECORDED"
+    CHILD_PROFILE_CONFIGURED = "CHILD_PROFILE_CONFIGURED"
+    DEVICE_PAIRED = "DEVICE_PAIRED"
+    PERMISSIONS_GRANTED = "PERMISSIONS_GRANTED"
+    FIRST_HEALTHY_HEARTBEAT = "FIRST_HEALTHY_HEARTBEAT"
+    SHADOW_READY = "SHADOW_READY"
+
+
 class ConversationMessage(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -186,6 +197,56 @@ class DeviceHeartbeat(BaseModel):
     observer_healthy: bool
     offline_queue_depth: Annotated[int, Field(ge=0, le=1000)] = 0
     observed_at: datetime = Field(default_factory=utc_now)
+
+
+class PilotOnboardingEventCreate(BaseModel):
+    """Allowlisted funnel event. It intentionally has no arbitrary metadata/content field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    child_id: str = Field(min_length=1, max_length=100)
+    device_id: str | None = Field(default=None, min_length=1, max_length=100)
+    session_id: str = Field(min_length=8, max_length=128)
+    stage: PilotOnboardingStage
+    occurred_at: datetime = Field(default_factory=utc_now)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+
+class PilotOnboardingEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    child_id: str
+    device_id: str | None
+    session_id: str
+    stage: PilotOnboardingStage
+    occurred_at: datetime
+    created_at: datetime
+
+
+class PilotFunnelStageMetric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: PilotOnboardingStage
+    event_count: int
+    unique_sessions: int
+
+
+class PilotMetricsReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    window_started_at: datetime
+    generated_at: datetime
+    onboarding: list[PilotFunnelStageMetric]
+    health_sample_count: int
+    healthy_health_sample_count: int
+    agent_health_percent: float | None
+    heartbeat_age_max_seconds: float | None
+    offline_queue_depth_max: int | None
+    command_ack_count: int
+    command_ack_latency_p50_ms: float | None
+    command_ack_latency_p95_ms: float | None
+    command_ack_latency_max_ms: float | None
 
 
 class DeviceCommand(BaseModel):

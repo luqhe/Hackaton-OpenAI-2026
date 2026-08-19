@@ -4,6 +4,7 @@ from scripts.validate_pilot_readiness import (
     validate_operational_readiness,
     validate_protocol,
     validate_support_training,
+    validate_telemetry_instrumentation,
 )
 
 
@@ -38,3 +39,7 @@ def test_support_training_is_complete_but_roster_is_honestly_pending() -> None:
 
 def test_operational_rules_are_valid_without_claiming_live_paging() -> None:
     assert validate_operational_readiness() == []
+
+
+def test_pilot_telemetry_is_minimized_and_matches_command_slo() -> None:
+    assert validate_telemetry_instrumentation() == []
