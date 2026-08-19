@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import json
 from pathlib import Path
 from typing import Any
@@ -54,12 +55,83 @@ def validate_protocol() -> list[str]:
     return errors
 
 
+def validate_legal_package() -> list[str]:
+    errors: list[str] = []
+    approval_path = ROOT / "config/pilot/legal-approvals.v1.json"
+    if not approval_path.is_file():
+        return ["missing legal approval record"]
+    approvals = _load_json("config/pilot/legal-approvals.v1.json")
+    if approvals.get("schema_version") != 1:
+        errors.append("legal approval schema_version must be 1")
+    if approvals.get("approved_for_pilot") is not False:
+        errors.append("draft legal package must not claim pilot approval")
+
+    expected_reviewers = {"LEGAL", "PRIVACY", "PRODUCT_SAFETY"}
+    records = approvals.get("required_approvals", {})
+    if set(records) != expected_reviewers:
+        errors.append("legal approval record must require Legal, Privacy and Product Safety")
+    for role, record in records.items():
+        if record.get("status") != "PENDING":
+            errors.append(f"{role} must remain PENDING until a real review is recorded")
+        if any(record.get(field) is not None for field in ("reviewer", "reviewed_at", "scope")):
+            errors.append(f"{role} cannot have fabricated review metadata")
+
+    documents = approvals.get("documents", [])
+    if len(documents) != 4:
+        errors.append("legal package must list four controlled documents")
+    for relative_path in documents:
+        path = ROOT / relative_path
+        if not path.is_file():
+            errors.append(f"missing legal package document: {relative_path}")
+            continue
+        content = path.read_text(encoding="utf-8")
+        if "R5-02" not in content:
+            errors.append(f"{relative_path} is missing the R5-02 marker")
+
+    consent = ROOT / "docs/pilot/legal/consent-and-assent.md"
+    if consent.is_file():
+        content = consent.read_text(encoding="utf-8")
+        for marker in ("voluntário", "retirar", "não coleta câmera ou microfone", "não aprovada"):
+            if marker not in content:
+                errors.append(f"consent draft is missing marker {marker}")
+    return errors
+
+
+def activation_blockers() -> list[str]:
+    blockers: list[str] = []
+    protocol = _load_json("config/pilot/protocol.v1.json")
+    approvals = _load_json("config/pilot/legal-approvals.v1.json")
+    if protocol.get("pilot_enabled") is not True:
+        blockers.append("pilot protocol is disabled")
+    if approvals.get("approved_for_pilot") is not True:
+        blockers.append("legal/privacy/product-safety approval is not recorded")
+    for role, record in approvals.get("required_approvals", {}).items():
+        if record.get("status") != "APPROVED":
+            blockers.append(f"{role} approval is {record.get('status', 'MISSING')}")
+    return blockers
+
+
 def main() -> int:
-    errors = validate_protocol()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--activation-gate",
+        action="store_true",
+        help="fail unless all external approvals and pilot enablement are recorded",
+    )
+    args = parser.parse_args()
+    errors = validate_protocol() + validate_legal_package()
     if errors:
         for error in errors:
             print(f"ERROR: {error}")
         return 1
+    if args.activation_gate:
+        blockers = activation_blockers()
+        if blockers:
+            for blocker in blockers:
+                print(f"BLOCKED: {blocker}")
+            return 2
+        print("Pilot activation gate passed.")
+        return 0
     print("Pilot readiness artifacts are internally consistent; external approvals are not implied.")
     return 0
 

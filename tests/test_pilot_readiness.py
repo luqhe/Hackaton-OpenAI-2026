@@ -1,5 +1,27 @@
-from scripts.validate_pilot_readiness import validate_protocol
+from scripts.validate_pilot_readiness import (
+    activation_blockers,
+    validate_legal_package,
+    validate_protocol,
+)
 
 
 def test_pilot_protocol_is_safe_and_complete() -> None:
     assert validate_protocol() == []
+
+
+def test_legal_package_is_complete_without_claiming_external_approval() -> None:
+    assert validate_legal_package() == []
+
+
+def test_activation_gate_stays_closed_until_real_approvals_are_recorded() -> None:
+    blockers = activation_blockers()
+    assert "pilot protocol is disabled" in blockers
+    assert "legal/privacy/product-safety approval is not recorded" in blockers
+    pending_roles = {
+        item.split(" approval", 1)[0] for item in blockers if item.endswith(" approval is PENDING")
+    }
+    assert pending_roles == {
+        "LEGAL",
+        "PRIVACY",
+        "PRODUCT_SAFETY",
+    }
