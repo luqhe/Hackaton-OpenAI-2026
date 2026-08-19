@@ -37,6 +37,18 @@ class GuardianApi(baseUrl: String) {
         return JSONObject(request("POST", "/api/devices/pair", body.toString())).toDevice()
     }
 
+    fun heartbeat(deviceId: String): Device {
+        val body = JSONObject()
+            .put("agent_version", "guardian-android/${BuildConfig.VERSION_NAME}")
+            .put("screen_recording_permission", false)
+            .put("accessibility_permission", false)
+            .put("observer_healthy", false)
+            .put("offline_queue_depth", 0)
+        return JSONObject(
+            request("POST", "/api/devices/${encode(deviceId)}/heartbeat", body.toString()),
+        ).toDevice()
+    }
+
     fun incidents(childId: String = "child-demo"): List<Incident> {
         val json = JSONArray(request("GET", "/api/incidents?child_id=${encode(childId)}&limit=50"))
         return (0 until json.length()).map { json.getJSONObject(it).toIncident() }
@@ -147,6 +159,7 @@ private fun JSONObject.toDevice() = Device(
     name = optString("name"),
     platform = optString("platform"),
     protectionStatus = optString("protection_status"),
+    lastSeenAt = if (isNull("last_seen_at")) null else optString("last_seen_at"),
 )
 
 private fun JSONObject.toIncident() = Incident(
