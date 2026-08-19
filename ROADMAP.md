@@ -159,7 +159,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 
 ## Épico 1.4 — Execução persistente e testes
 
-- [ ] `R1-23` Empacotar agente e helper para instalação de desenvolvimento.
+- [x] `R1-23` Empacotar agente e helper para instalação de desenvolvimento.
 - [ ] `R1-24` Iniciar automaticamente após login/reinício.
 - [ ] `R1-25` Adicionar logs locais estruturados, sem conteúdo sensível bruto.
 - [ ] `R1-26` Criar testes E2E em macOS para captura, risco, bloqueio e desbloqueio.
