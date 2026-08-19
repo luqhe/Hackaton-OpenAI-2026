@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import tempfile
 from datetime import datetime, timedelta
 from enum import StrEnum
 from pathlib import Path
@@ -86,9 +88,26 @@ class ReviewAuditStore:
         self.path = path
 
     def append(self, entry: ReviewAuditEntry) -> None:
+        entries = [*self.load(), entry]
         self.path.parent.mkdir(parents=True, exist_ok=True)
-        with self.path.open("a", encoding="utf-8") as stream:
-            stream.write(entry.model_dump_json() + "\n")
+        handle = tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            prefix=f".{self.path.name}.",
+            suffix=".tmp",
+            dir=self.path.parent,
+            delete=False,
+        )
+        temporary = Path(handle.name)
+        try:
+            with handle:
+                for audit_entry in entries:
+                    handle.write(audit_entry.model_dump_json() + "\n")
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, self.path)
+        finally:
+            temporary.unlink(missing_ok=True)
 
     def load(self) -> list[ReviewAuditEntry]:
         if not self.path.exists():
@@ -116,9 +135,10 @@ def review_event(
     event: PilotReviewEvent,
     grant: ReviewGrant,
     *,
+    audit_store: ReviewAuditStore,
     accessed_at: datetime,
     include_evidence: bool = False,
-) -> tuple[PilotReviewView, ReviewAuditEntry]:
+) -> PilotReviewView:
     if accessed_at.tzinfo is None:
         raise PermissionError("Review access requires a timezone-aware timestamp")
     if not grant.valid_from <= accessed_at < grant.expires_at:
@@ -143,4 +163,5 @@ def review_event(
         accessed_fields=accessed_fields,
         evidence_disclosed=evidence_object_id is not None,
     )
-    return view, audit
+    audit_store.append(audit)
+    return view

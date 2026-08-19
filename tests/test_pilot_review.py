@@ -48,9 +48,9 @@ def grant(*, evidence_access: bool = False) -> ReviewGrant:
 
 
 def test_metadata_review_excludes_evidence_and_writes_minimum_audit(tmp_path: Path) -> None:
-    view, audit = review_event(event(), grant(), accessed_at=NOW)
     store = ReviewAuditStore(tmp_path / "review-audit.jsonl")
-    store.append(audit)
+    view = review_event(event(), grant(), audit_store=store, accessed_at=NOW)
+    audit = store.load()[0]
 
     assert view.evidence_object_id is None
     assert audit.evidence_disclosed is False
@@ -59,13 +59,20 @@ def test_metadata_review_excludes_evidence_and_writes_minimum_audit(tmp_path: Pa
     assert store.load() == [audit]
 
 
-def test_evidence_requires_explicit_scoped_access() -> None:
+def test_evidence_requires_explicit_scoped_access(tmp_path: Path) -> None:
+    store = ReviewAuditStore(tmp_path / "review-audit.jsonl")
     with pytest.raises(PermissionError, match="evidence"):
-        review_event(event(), grant(), accessed_at=NOW, include_evidence=True)
+        review_event(event(), grant(), audit_store=store, accessed_at=NOW, include_evidence=True)
 
-    view, audit = review_event(event(), grant(evidence_access=True), accessed_at=NOW, include_evidence=True)
+    view = review_event(
+        event(),
+        grant(evidence_access=True),
+        audit_store=store,
+        accessed_at=NOW,
+        include_evidence=True,
+    )
     assert view.evidence_object_id == "evidence/object-42"
-    assert audit.evidence_disclosed is True
+    assert store.load()[0].evidence_disclosed is True
 
 
 @pytest.mark.parametrize(
@@ -78,10 +85,16 @@ def test_evidence_requires_explicit_scoped_access() -> None:
 def test_review_rejects_expired_or_out_of_scope_access(
     accessed_at: datetime,
     cohort_id: str,
+    tmp_path: Path,
 ) -> None:
     candidate = event().model_copy(update={"cohort_id": cohort_id})
     with pytest.raises(PermissionError):
-        review_event(candidate, grant(), accessed_at=accessed_at)
+        review_event(
+            candidate,
+            grant(),
+            audit_store=ReviewAuditStore(tmp_path / "audit.jsonl"),
+            accessed_at=accessed_at,
+        )
 
 
 def test_review_contract_rejects_raw_content_and_long_lived_grants() -> None:
@@ -95,3 +108,16 @@ def test_review_contract_rejects_raw_content_and_long_lived_grants() -> None:
                 "expires_at": NOW + timedelta(hours=2),
             }
         )
+
+
+def test_review_is_not_returned_when_mandatory_audit_fails(monkeypatch, tmp_path: Path) -> None:
+    store = ReviewAuditStore(tmp_path / "review-audit.jsonl")
+
+    def fail_audit(entry) -> None:
+        raise OSError("audit storage unavailable")
+
+    monkeypatch.setattr(store, "append", fail_audit)
+    with pytest.raises(OSError, match="audit storage unavailable"):
+        review_event(event(), grant(), audit_store=store, accessed_at=NOW)
+
+    assert store.load() == []
