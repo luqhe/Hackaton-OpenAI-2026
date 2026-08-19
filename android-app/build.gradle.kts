@@ -14,10 +14,15 @@ android {
         targetSdk = 36
         versionCode = 1
         versionName = "0.1.0"
+        manifestPlaceholders["guardianCleartext"] = "false"
     }
 
     buildTypes {
+        debug {
+            manifestPlaceholders["guardianCleartext"] = "true"
+        }
         release {
+            manifestPlaceholders["guardianCleartext"] = "false"
             isMinifyEnabled = true
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
