@@ -8,6 +8,7 @@ from guardian_core.pilot import (
     TECHNICAL_TELEMETRY_FIELDS,
     AlertApproval,
     BlockPilotApproval,
+    PilotKillSwitch,
     PilotMode,
     PilotRolloutConfig,
     apply_pilot_rollout,
@@ -42,6 +43,7 @@ def alert_only_config() -> PilotRolloutConfig:
             "mode": PilotMode.ALERT_ONLY,
             "cohort_ids": frozenset({"pilot-alert-a"}),
             "alert_approvals": (approval,),
+            "kill_switches": (),
         }
     )
 
@@ -217,3 +219,75 @@ def test_limited_block_fails_to_log_on_version_mismatch() -> None:
 
     assert gated.action == EnforcementAction.LOG
     assert audit.approval_id is None
+
+
+def test_global_kill_switch_overrides_every_block_approval() -> None:
+    config = limited_block_config().model_copy(
+        update={
+            "kill_switches": (
+                PilotKillSwitch(
+                    switch_id="global-stop",
+                    ceiling=EnforcementAction.LOG,
+                    reason="Pilot paused by incident commander",
+                ),
+            )
+        }
+    )
+    gated, audit = apply_pilot_rollout(
+        proposed_block(),
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_id="pilot-alert-a",
+        versions=VERSIONS,
+        config=config,
+        risk_control_decision=block_control_decision(),
+    )
+
+    assert gated.action == EnforcementAction.LOG
+    assert audit.kill_switch_id == "global-stop"
+    assert audit.actual_intervention is False
+
+
+def test_category_and_cohort_kill_switch_is_granular() -> None:
+    switch = PilotKillSwitch(
+        switch_id="dangerous-contact-cohort-a-stop",
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_id="pilot-alert-a",
+        ceiling=EnforcementAction.ALERT,
+        reason="Category investigation",
+    )
+    config = limited_block_config().model_copy(update={"kill_switches": (switch,)})
+    gated, audit = apply_pilot_rollout(
+        proposed_block(),
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_id="pilot-alert-a",
+        versions=VERSIONS,
+        config=config,
+        risk_control_decision=block_control_decision(),
+    )
+
+    assert gated.action == EnforcementAction.ALERT
+    assert audit.kill_switch_id == switch.switch_id
+
+    unaffected_config = config.model_copy(update={"cohort_ids": frozenset({"pilot-alert-b"})})
+    unaffected_approval = config.block_approvals[0].model_copy(
+        update={"cohort_ids": frozenset({"pilot-alert-b"})}
+    )
+    unaffected_alert = config.alert_approvals[0].model_copy(
+        update={"cohort_ids": frozenset({"pilot-alert-b"})}
+    )
+    unaffected_config = unaffected_config.model_copy(
+        update={
+            "block_approvals": (unaffected_approval,),
+            "alert_approvals": (unaffected_alert,),
+        }
+    )
+    unaffected, audit = apply_pilot_rollout(
+        proposed_block(),
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_id="pilot-alert-b",
+        versions=VERSIONS,
+        config=unaffected_config,
+        risk_control_decision=block_control_decision(),
+    )
+    assert unaffected.action == EnforcementAction.BLOCK
+    assert audit.kill_switch_id is None

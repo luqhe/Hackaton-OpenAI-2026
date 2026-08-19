@@ -39,6 +39,7 @@ class PilotRolloutConfig(BaseModel):
     technical_telemetry_fields: frozenset[str] = TECHNICAL_TELEMETRY_FIELDS
     alert_approvals: tuple[AlertApproval, ...] = ()
     block_approvals: tuple[BlockPilotApproval, ...] = ()
+    kill_switches: tuple[PilotKillSwitch, ...] = ()
 
     @model_validator(mode="after")
     def validate_technical_telemetry(self) -> PilotRolloutConfig:
@@ -103,6 +104,23 @@ class BlockPilotApproval(BaseModel):
         )
 
 
+class PilotKillSwitch(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    switch_id: str = Field(min_length=1, max_length=120)
+    enabled: bool = True
+    category: RiskCategory | None = None
+    cohort_id: str | None = Field(default=None, min_length=1, max_length=120)
+    ceiling: EnforcementAction = EnforcementAction.LOG
+    reason: str = Field(min_length=1, max_length=500)
+
+    @model_validator(mode="after")
+    def validate_ceiling(self) -> PilotKillSwitch:
+        if self.ceiling not in {EnforcementAction.LOG, EnforcementAction.ALERT}:
+            raise ValueError("A pilot kill switch ceiling must be LOG or ALERT")
+        return self
+
+
 class PilotActionDecision(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -113,6 +131,7 @@ class PilotActionDecision(BaseModel):
     simulated_action: EnforcementAction
     actual_intervention: bool
     approval_id: str | None = None
+    kill_switch_id: str | None = None
     reason: str
 
 
@@ -162,6 +181,30 @@ def _matching_block_approval(
         ),
         None,
     )
+
+
+PILOT_ACTION_ORDER = {
+    EnforcementAction.IGNORE: 0,
+    EnforcementAction.LOG: 1,
+    EnforcementAction.ALERT: 2,
+    EnforcementAction.BLOCK: 3,
+}
+
+
+def _active_kill_switch(
+    config: PilotRolloutConfig,
+    *,
+    category: RiskCategory | None,
+    cohort_id: str,
+) -> PilotKillSwitch | None:
+    matches = [
+        switch
+        for switch in config.kill_switches
+        if switch.enabled
+        and (switch.category is None or switch.category == category)
+        and (switch.cohort_id is None or switch.cohort_id == cohort_id)
+    ]
+    return min(matches, key=lambda item: PILOT_ACTION_ORDER[item.ceiling], default=None)
 
 
 def apply_pilot_rollout(
@@ -241,6 +284,11 @@ def apply_pilot_rollout(
                     else "BLOCK gate failed and no exact alert approval exists"
                 )
 
+    kill_switch = _active_kill_switch(config, category=category, cohort_id=cohort_id)
+    if kill_switch and PILOT_ACTION_ORDER[effective] > PILOT_ACTION_ORDER[kill_switch.ceiling]:
+        effective = kill_switch.ceiling
+        reason = f"{reason}; pilot kill switch {kill_switch.switch_id} applies: {kill_switch.reason}"
+
     gated = decision
     if effective != decision.action:
         gated = decision.model_copy(
@@ -257,6 +305,7 @@ def apply_pilot_rollout(
         simulated_action=decision.action,
         actual_intervention=effective in {EnforcementAction.ALERT, EnforcementAction.BLOCK},
         approval_id=approval.approval_id if approval else None,
+        kill_switch_id=kill_switch.switch_id if kill_switch else None,
         reason=reason,
     )
     return gated, pilot_decision

@@ -86,3 +86,32 @@ Se qualquer requisito de `BLOCK` falhar, a ação só recua para `ALERT` quando 
 de alerta exata; sem ela, recua para `LOG`. Assim, uma aprovação ampla, outra coorte ou uma mudança
 de versão nunca promove uma intervenção por herança. O baseline mantém `block_approvals=[]` e todos
 os kill switches R3 ativos, portanto nenhum bloqueio real está autorizado no estado versionado.
+
+## Kill switch e rollback (R5-12)
+
+Kill switches do piloto podem ser globais ou limitados por categoria e/ou coorte e reduzem o teto
+imediatamente para `ALERT` ou `LOG`, mesmo quando todas as aprovações existem. Quando mais de um
+switch corresponde ao evento, vence o teto mais restritivo. O baseline traz um switch global em
+`LOG`; removê-lo é uma promoção e exige o processo de aprovação.
+
+O store operacional grava snapshots endereçados por SHA-256, troca `active.json` atomicamente e
+mantém log append-only com digest anterior/novo, ator pseudônimo, ticket e horário. Rollback só
+aceita snapshot íntegro que seja `TECHNICAL_SHADOW` ou preserve kill switch global, evitando usar o
+comando de emergência para reativar intervenção.
+
+Exemplo operacional, sempre com ticket de mudança/incidente:
+
+```bash
+python scripts/manage_pilot_rollout.py validate config/pilot-rollout.v1.json
+python scripts/manage_pilot_rollout.py activate config/pilot-rollout.v1.json \
+  --actor-digest "$PILOT_ACTOR_DIGEST" --change-reference PILOT-123
+python scripts/manage_pilot_rollout.py status
+python scripts/manage_pilot_rollout.py rollback "$KNOWN_SAFE_DIGEST" \
+  --actor-digest "$PILOT_ACTOR_DIGEST" --change-reference INC-456
+```
+
+Procedimento de incidente: acionar primeiro o kill switch global, confirmar telemetria sem novas
+intervenções, selecionar snapshot conhecido e seguro, executar rollback, verificar o digest ativo e
+preservar o audit log. O exercício automatizado valida ativação, rollback, snapshot ausente,
+tentativa insegura e adulteração de digest; a execução em staging ainda precisa ser registrada por
+Pilot Operations antes de remover o switch global.

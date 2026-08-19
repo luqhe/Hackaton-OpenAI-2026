@@ -5,6 +5,16 @@
   "cohort_ids": ["pilot-technical"],
   "alert_approvals": [],
   "block_approvals": [],
+  "kill_switches": [
+    {
+      "switch_id": "pilot-global-pre-authorization",
+      "enabled": true,
+      "category": null,
+      "cohort_id": null,
+      "ceiling": "LOG",
+      "reason": "Real pilot interventions remain disabled until external approvals are recorded"
+    }
+  ],
   "technical_telemetry_fields": [
     "agent_version",
     "api_latency_ms",
