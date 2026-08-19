@@ -5,6 +5,12 @@ on:
     branches: [main, "agent/**"]
     paths:
       - "android-app/**"
+      - "api/auth.py"
+      - "api/main.py"
+      - "guardian_core/device_api.py"
+      - "guardian_core/models.py"
+      - "CONTEXT.md"
+      - "scripts/run-mobile-demo*"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
@@ -12,6 +18,12 @@ on:
   pull_request:
     paths:
       - "android-app/**"
+      - "api/auth.py"
+      - "api/main.py"
+      - "guardian_core/device_api.py"
+      - "guardian_core/models.py"
+      - "CONTEXT.md"
+      - "scripts/run-mobile-demo*"
       - "build.gradle.kts"
       - "settings.gradle.kts"
       - "gradle.properties"
