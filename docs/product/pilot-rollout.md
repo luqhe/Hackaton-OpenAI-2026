@@ -54,3 +54,22 @@ Processo operacional:
 
 Esse contrato não substitui a autenticação e o isolamento multi-tenant requeridos antes de operar
 com famílias reais; ele define e testa a fronteira mínima que a futura API autenticada deve aplicar.
+
+## Métricas de segurança e compreensão (R5-10)
+
+O relatório de piloto calcula taxas com denominadores explícitos e sempre segmentadas por coorte:
+
+- falso positivo = eventos marcados pelo modelo e revisados como seguros / eventos marcados e
+  revisados por humano;
+- contestação = incidentes contestados / incidentes exibidos à família;
+- compreensão da intervenção = média da pergunta estruturada em escala 1–5;
+- confiança no Guardian = média da pergunta estruturada em escala 1–5.
+
+O survey guarda somente ID de resposta, digest pseudônimo da família, horário, coorte e duas notas;
+não há campo de texto livre. As médias de compreensão e confiança são suprimidas quando a coorte
+tem menos de cinco respostas (o mínimo pode aumentar por decisão de Privacy). O relatório inclui
+contagens e cortes por categoria para evitar que uma média global esconda regressões.
+
+Taxas vazias retornam `0` acompanhadas do denominador `0`; consumidores não devem interpretar esse
+valor como qualidade comprovada. Métricas só autorizam promoção quando a amostra representativa e
+os gates documentados forem revisados externamente.
