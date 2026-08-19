@@ -311,10 +311,11 @@ def test_rotation_has_grace_and_idempotency_key_cannot_change_public_key(tmp_pat
 
 def test_commands_are_versioned_expiring_idempotent_and_device_bound(tmp_path) -> None:
     now = datetime(2026, 8, 19, 18, 0, tzinfo=UTC)
+    clock = [now]
     app = create_app(
         settings=settings(tmp_path),
         family_scope_resolver=scope_resolver,
-        device_clock=lambda: now,
+        device_clock=lambda: clock[0],
         pairing_pepper=b"pairing-test-pepper-with-at-least-32-bytes",
     )
     with TestClient(app) as client:
@@ -331,12 +332,13 @@ def test_commands_are_versioned_expiring_idempotent_and_device_bound(tmp_path) -
             == 200
         )
 
+        clock[0] = now + timedelta(seconds=1)
         polled = signed_request(
             client,
             credential,
             "GET",
             "/api/agent/commands?after_id=0&wait_seconds=0",
-            now + timedelta(seconds=1),
+            clock[0],
         )
         assert polled.status_code == 200
         command = polled.json()[0]
@@ -344,25 +346,123 @@ def test_commands_are_versioned_expiring_idempotent_and_device_bound(tmp_path) -
         assert command["type"] == "UNLOCK_APPLICATION"
         assert command["idempotency_key"] == f"unlock:{incident['id']}"
         assert datetime.fromisoformat(command["expires_at"]) > now
+        assert command["attempt_count"] == 1
+
+        retry_target = f"/api/agent/commands?after_id={command['id']}&wait_seconds=0"
+        not_ready = signed_request(
+            client,
+            credential,
+            "GET",
+            f"/api/agent/commands?after_id={command['id']}&wait_seconds=0.0",
+            now + timedelta(seconds=1),
+        )
+        assert not_ready.json() == []
+        clock[0] = now + timedelta(seconds=2)
+        retried = signed_request(
+            client,
+            credential,
+            "GET",
+            retry_target,
+            clock[0],
+        )
+        assert retried.status_code == 200
+        assert retried.json()[0]["id"] == command["id"]
+        assert retried.json()[0]["attempt_count"] == 2
 
         ack_target = f"/api/agent/commands/{command['id']}/ack"
+        clock[0] = now + timedelta(seconds=3)
         ack = signed_request(
             client,
             credential,
             "POST",
             ack_target,
-            now + timedelta(seconds=2),
+            clock[0],
             {"result": "EXECUTED"},
         )
         assert ack.status_code == 200
         assert ack.json()["status"] == "ACKNOWLEDGED"
+        clock[0] = now + timedelta(seconds=4)
         repeated = signed_request(
             client,
             credential,
             "POST",
             ack_target,
-            now + timedelta(seconds=3),
+            clock[0],
             {"result": "EXECUTED"},
         )
         assert repeated.status_code == 200
         assert repeated.json()["status"] == "ACKNOWLEDGED"
+
+
+def test_command_cannot_be_acknowledged_before_delivery_or_after_expiry(tmp_path) -> None:
+    clock = [datetime(2026, 8, 19, 18, 0, tzinfo=UTC)]
+    app = create_app(
+        settings=settings(tmp_path),
+        family_scope_resolver=scope_resolver,
+        device_clock=lambda: clock[0],
+        pairing_pepper=b"pairing-test-pepper-with-at-least-32-bytes",
+    )
+    with TestClient(app) as client:
+        seed_family(app, "family-a", "child-a")
+        _, credential = pair(client, "family-a", "child-a")
+        incident = signed_request(
+            client,
+            credential,
+            "POST",
+            "/api/agent/incidents",
+            clock[0],
+            incident_payload(),
+        ).json()
+        assert (
+            client.post(
+                f"/api/incidents/{incident['id']}/unlock",
+                headers={"X-Test-Family": "family-a"},
+            ).status_code
+            == 200
+        )
+        with app.state.store.connect() as connection:
+            command_id = connection.execute(
+                "SELECT id FROM device_commands WHERE incident_id = ?",
+                (incident["id"],),
+            ).fetchone()["id"]
+        ack_target = f"/api/agent/commands/{command_id}/ack"
+
+        early = signed_request(
+            client,
+            credential,
+            "POST",
+            ack_target,
+            clock[0],
+            {"result": "EXECUTED"},
+        )
+        assert early.status_code == 409
+        assert early.json() == {"detail": "command_not_delivered"}
+
+        clock[0] += timedelta(seconds=1)
+        delivered = signed_request(
+            client,
+            credential,
+            "GET",
+            "/api/agent/commands?after_id=0&wait_seconds=0",
+            clock[0],
+        )
+        assert delivered.status_code == 200
+        assert delivered.json()[0]["id"] == command_id
+
+        clock[0] += timedelta(minutes=11)
+        expired = signed_request(
+            client,
+            credential,
+            "POST",
+            ack_target,
+            clock[0],
+            {"result": "EXECUTED"},
+        )
+        assert expired.status_code == 409
+        assert expired.json() == {"detail": "command_expired"}
+        with app.state.store.connect() as connection:
+            status_value = connection.execute(
+                "SELECT status FROM device_commands WHERE id = ?",
+                (command_id,),
+            ).fetchone()["status"]
+        assert status_value == "EXPIRED"

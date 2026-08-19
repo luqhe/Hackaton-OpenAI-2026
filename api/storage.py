@@ -694,6 +694,7 @@ class GuardianStore:
 
     def revoke_membership(self, family_id: str, membership_id: str) -> Membership:
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
                 SELECT * FROM memberships
@@ -932,6 +933,7 @@ class GuardianStore:
     def consume_password_reset_token(self, token_hash: str, password_hash: str) -> bool:
         now = _now_iso()
         with self.connect() as connection:
+            connection.execute("BEGIN IMMEDIATE")
             row = connection.execute(
                 """
                 SELECT id, account_id FROM password_reset_tokens
@@ -941,10 +943,15 @@ class GuardianStore:
             ).fetchone()
             if row is None:
                 return False
-            connection.execute(
-                "UPDATE password_reset_tokens SET used_at = ? WHERE id = ?",
-                (now, row["id"]),
+            consumed = connection.execute(
+                """
+                UPDATE password_reset_tokens SET used_at = ?
+                WHERE id = ? AND used_at IS NULL AND expires_at > ?
+                """,
+                (now, row["id"], now),
             )
+            if consumed.rowcount != 1:
+                return False
             connection.execute(
                 "UPDATE accounts SET password_hash = ? WHERE id = ? AND auth_enabled = 1",
                 (password_hash, row["account_id"]),

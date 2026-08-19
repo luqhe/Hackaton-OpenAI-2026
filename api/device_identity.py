@@ -472,6 +472,8 @@ class DeviceIdentityStore:
     def acknowledge_command(
         self, principal: DevicePrincipal, command_id: int, acknowledgement: CommandAcknowledgement
     ) -> DeviceCommand:
+        state_error: str | None = None
+        updated: sqlite3.Row | None = None
         with self.store.connect() as connection:
             self._prepare_commands(connection)
             row = connection.execute(
@@ -482,17 +484,35 @@ class DeviceIdentityStore:
                 raise KeyError(command_id)
             if row["status"] in {CommandStatus.ACKNOWLEDGED, CommandStatus.FAILED}:
                 return self._command_from_row(row)
-            status = (
-                CommandStatus.ACKNOWLEDGED
-                if acknowledgement.result == CommandExecutionResult.EXECUTED
-                else CommandStatus.FAILED
-            )
-            error_code = acknowledgement.error_code if status == CommandStatus.FAILED else None
-            connection.execute(
-                "UPDATE device_commands SET status = ?, acknowledged_at = ?, terminal_error = ? WHERE id = ?",
-                (status, self.clock().isoformat(), error_code, command_id),
-            )
-            updated = connection.execute(
-                "SELECT * FROM device_commands WHERE id = ?", (command_id,)
-            ).fetchone()
+            now = self.clock()
+            if row["status"] == CommandStatus.EXPIRED or (
+                row["expires_at"] is not None and datetime.fromisoformat(row["expires_at"]) <= now
+            ):
+                connection.execute(
+                    "UPDATE device_commands SET status = 'EXPIRED', "
+                    "terminal_error = 'COMMAND_EXPIRED' WHERE id = ?",
+                    (command_id,),
+                )
+                state_error = "command_expired"
+            elif row["status"] != CommandStatus.DELIVERED:
+                state_error = "command_not_delivered"
+            else:
+                status = (
+                    CommandStatus.ACKNOWLEDGED
+                    if acknowledgement.result == CommandExecutionResult.EXECUTED
+                    else CommandStatus.FAILED
+                )
+                error_code = acknowledgement.error_code if status == CommandStatus.FAILED else None
+                connection.execute(
+                    "UPDATE device_commands SET status = ?, acknowledged_at = ?, "
+                    "terminal_error = ? WHERE id = ?",
+                    (status, now.isoformat(), error_code, command_id),
+                )
+                updated = connection.execute(
+                    "SELECT * FROM device_commands WHERE id = ?", (command_id,)
+                ).fetchone()
+        if state_error is not None:
+            raise ValueError(state_error)
+        if updated is None:
+            raise RuntimeError("Command acknowledgement did not produce a terminal record")
         return self._command_from_row(updated)

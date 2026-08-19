@@ -1,4 +1,5 @@
-from datetime import UTC, datetime
+from concurrent.futures import ThreadPoolExecutor
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -219,6 +220,32 @@ def test_password_recovery_is_generic_one_time_and_revokes_sessions(tmp_path) ->
     assert reused.status_code == 400
     assert old_session.status_code == 401
     assert new_login.status_code == 200
+
+
+def test_password_recovery_token_is_consumed_atomically(tmp_path) -> None:
+    app = create_app(settings=settings_for(tmp_path))
+    with TestClient(app) as client:
+        identity = create_family_login(client)
+        store = client.app.state.store
+        token_hash = auth._token_hash("atomic-reset-token")
+        store.create_password_reset_token(
+            identity["account_id"],
+            token_hash,
+            datetime.now(UTC) + timedelta(minutes=5),
+        )
+
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            results = list(
+                executor.map(
+                    lambda password: store.consume_password_reset_token(
+                        token_hash,
+                        auth.hash_password(password),
+                    ),
+                    ("first atomic password", "second atomic password"),
+                )
+            )
+
+    assert sorted(results) == [False, True]
 
 
 def test_foreign_device_is_indistinguishable_from_missing_device(tmp_path) -> None:

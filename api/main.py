@@ -263,6 +263,8 @@ def create_app(
             return device_store.acknowledge_command(principal, command_id, payload)
         except KeyError:
             raise HTTPException(status_code=404, detail="Command not found") from None
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
