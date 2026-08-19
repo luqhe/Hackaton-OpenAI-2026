@@ -388,6 +388,20 @@ def test_observe_uses_built_in_fail_safe_when_pilot_config_is_invalid(monkeypatc
     assert config.kill_switches[0].ceiling == "LOG"
 
 
+def test_corrupt_active_config_wins_over_valid_file_config(tmp_path) -> None:
+    state_directory = tmp_path / "pilot-state"
+    state_directory.mkdir()
+    (state_directory / "active.json").write_text("broken", encoding="utf-8")
+
+    config = agent_main.load_runtime_pilot_rollout(
+        agent_main.DEFAULT_PILOT_CONFIG_PATH,
+        state_directory,
+    )
+
+    assert config.rollout_id == "runtime-fail-safe"
+    assert config.mode == "TECHNICAL_SHADOW"
+
+
 def test_observe_command_skips_analysis_for_static_screen(monkeypatch, tmp_path) -> None:
     settings = development_settings(tmp_path)
 

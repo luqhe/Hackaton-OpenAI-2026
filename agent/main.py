@@ -37,6 +37,7 @@ from guardian_core.pilot import (
     load_pilot_rollout,
     validate_pilot_technical_telemetry,
 )
+from guardian_core.pilot_control import PilotConfigStore
 from guardian_core.policy import apply_policy
 from guardian_core.version import APP_VERSION
 from risk_engine import assess_risk
@@ -55,10 +56,18 @@ from risk_engine.pipeline import AnalysisSource, ContextualRiskPipeline
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOGGER = StructuredAgentLogger()
 DEFAULT_PILOT_CONFIG_PATH = PROJECT_ROOT / "config" / "pilot-rollout.v1.json"
+DEFAULT_PILOT_STATE_DIRECTORY = PROJECT_ROOT / ".data" / "pilot-controls"
 RUNTIME_DATASET_VERSION = "runtime-observation-unapproved"
 
 
-def load_runtime_pilot_rollout(path: Path):
+def load_runtime_pilot_rollout(path: Path, state_directory: Path | None = None):
+    if state_directory is not None:
+        store = PilotConfigStore(state_directory)
+        if store.active_path.exists():
+            config = store.current_or_fail_safe()
+            if config.rollout_id == "runtime-fail-safe":
+                AGENT_LOGGER.event("pilot_active_config_corrupt", config_path=str(store.active_path))
+            return config
     try:
         return load_pilot_rollout(path)
     except (OSError, ValueError):
@@ -359,7 +368,7 @@ def run_observer(args: argparse.Namespace) -> int:
     client = GuardianAPIClient(args.api_url)
     state_store = AgentStateStore(args.runtime_state_path)
     outbox = PersistentOutbox(args.outbox_path)
-    pilot_config = load_runtime_pilot_rollout(args.pilot_config_path)
+    pilot_config = load_runtime_pilot_rollout(args.pilot_config_path, args.pilot_state_directory)
     runtime_state = state_store.load()
     observer = MacOSObserver(
         change_threshold=args.change_threshold,
@@ -613,6 +622,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--pilot-config-path",
         type=Path,
         default=DEFAULT_PILOT_CONFIG_PATH,
+    )
+    observe.add_argument(
+        "--pilot-state-directory",
+        type=Path,
+        default=DEFAULT_PILOT_STATE_DIRECTORY,
     )
     observe.add_argument("--pilot-cohort-id", default="pilot-technical")
     observe.add_argument("--openai-timeout", type=float, default=20)

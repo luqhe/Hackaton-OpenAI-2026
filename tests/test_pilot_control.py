@@ -154,3 +154,15 @@ def test_partial_write_failure_restores_snapshot_audit_and_active(monkeypatch, t
     assert store.active_path.read_bytes() == active_before
     assert store.audit_path.read_bytes() == audit_before
     assert not promoted_snapshot.exists()
+
+
+def test_corrupt_active_config_returns_built_in_fail_safe(tmp_path: Path) -> None:
+    store = PilotConfigStore(tmp_path / "pilot-state")
+    store.active_path.parent.mkdir(parents=True)
+    store.active_path.write_text('{"mode":"LIMITED_BLOCK",broken', encoding="utf-8")
+
+    config = store.current_or_fail_safe()
+
+    assert config.rollout_id == "runtime-fail-safe"
+    assert config.mode == PilotMode.TECHNICAL_SHADOW
+    assert config.kill_switches[0].ceiling == "LOG"

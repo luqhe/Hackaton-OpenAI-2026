@@ -8,7 +8,12 @@ from pathlib import Path
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from guardian_core.pilot import PilotMode, PilotRolloutConfig, load_pilot_rollout
+from guardian_core.pilot import (
+    PilotMode,
+    PilotRolloutConfig,
+    fail_safe_pilot_rollout,
+    load_pilot_rollout,
+)
 
 
 class PilotChangeAction(StrEnum):
@@ -63,6 +68,12 @@ class PilotConfigStore:
         if not self.active_path.exists():
             return None
         return load_pilot_rollout(self.active_path)
+
+    def current_or_fail_safe(self) -> PilotRolloutConfig:
+        try:
+            return self.current() or fail_safe_pilot_rollout()
+        except (OSError, ValueError):
+            return fail_safe_pilot_rollout()
 
     def changes(self) -> list[PilotConfigChange]:
         if not self.audit_path.exists():
