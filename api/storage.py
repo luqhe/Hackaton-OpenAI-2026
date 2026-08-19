@@ -4,10 +4,10 @@ import hashlib
 import json
 import sqlite3
 import uuid
+from collections.abc import Iterator
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import UTC, date, datetime
 from pathlib import Path
-from typing import Iterator
 
 from guardian_core.models import (
     CommandStatus,
@@ -27,10 +27,11 @@ from guardian_core.models import (
     RiskLevel,
     TelemetryUpdate,
 )
+from guardian_core.version import SCHEMA_VERSION
 
 
 def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
+    return datetime.now(UTC).isoformat()
 
 
 SCHEMA = """
@@ -160,6 +161,11 @@ class GuardianStore:
         self.evidence_directory.mkdir(parents=True, exist_ok=True)
         with self.connect() as connection:
             connection.execute("PRAGMA journal_mode = WAL")
+            current_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            if current_version > SCHEMA_VERSION:
+                raise RuntimeError(
+                    f"Database schema version {current_version} is newer than supported version {SCHEMA_VERSION}"
+                )
             connection.executescript(SCHEMA)
             now = _now_iso()
             connection.execute(
@@ -189,15 +195,20 @@ class GuardianStore:
                     """,
                     ("child-demo", category, action, RiskLevel.HIGH, confidence),
                 )
+            connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             connection.execute("PRAGMA optimize")
 
     def child_exists(self, child_id: str) -> bool:
         with self.connect() as connection:
-            return connection.execute("SELECT 1 FROM children WHERE id = ?", (child_id,)).fetchone() is not None
+            return (
+                connection.execute("SELECT 1 FROM children WHERE id = ?", (child_id,)).fetchone() is not None
+            )
 
     def device_exists(self, device_id: str) -> bool:
         with self.connect() as connection:
-            return connection.execute("SELECT 1 FROM devices WHERE id = ?", (device_id,)).fetchone() is not None
+            return (
+                connection.execute("SELECT 1 FROM devices WHERE id = ?", (device_id,)).fetchone() is not None
+            )
 
     def pair_device(self, request: DevicePairRequest) -> Device:
         device_id = f"device-{uuid.uuid4().hex[:12]}"
@@ -271,6 +282,7 @@ class GuardianStore:
         )
         now = _now_iso()
         created = True
+
         def values(key: str) -> tuple[object, ...]:
             return (
                 incident_id,
@@ -350,7 +362,9 @@ class GuardianStore:
         urls = [f"/api/evidence/{item['id']}" for item in evidence_rows]
         return self._incident_from_row(row, urls)
 
-    def list_incidents(self, child_id: str, limit: int, status: IncidentStatus | None = None) -> list[Incident]:
+    def list_incidents(
+        self, child_id: str, limit: int, status: IncidentStatus | None = None
+    ) -> list[Incident]:
         sql = "SELECT id FROM incidents WHERE child_id = ?"
         parameters: list[object] = [child_id]
         if status is not None:

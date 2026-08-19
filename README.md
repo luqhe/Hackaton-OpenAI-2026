@@ -23,6 +23,9 @@ O modo padrão **não controla o sistema operacional**. Ele simula o estado de b
 - Dashboard responsivo do responsável, tela da criança e editor de políticas.
 - Agente em modo de demo e adaptadores macOS mínimos.
 - Testes automatizados do fluxo completo.
+- Release gates executáveis que limitam bloqueio automático por ambiente.
+- Configuração tipada para desenvolvimento, teste, staging e produção.
+- CI, lint, formatação, threat model, mapa de dados, registro de riscos e ADRs.
 
 ## Arquitetura
 
@@ -46,6 +49,8 @@ guardian/
 ├── guardian_core/    contratos compartilhados e Policy Engine
 ├── risk_engine/      avaliação contextual reproduzível
 ├── fixtures/         cenários controlados da demo
+├── config/           exemplos seguros por ambiente
+├── docs/             gates, segurança, privacidade e ADRs
 ├── web/              dashboard servido pela API
 ├── tests/            testes do risk engine, API e enforcement
 └── scripts/          preparação e execução
@@ -58,6 +63,7 @@ O dashboard estático é servido pelo próprio FastAPI para retirar um segundo r
 - Python 3.11 ou mais recente.
 - macOS apenas para captura e enforcement reais.
 - Portas locais disponíveis: `8000`.
+- Node.js 22 e pnpm 11 somente para lint/formatação do frontend durante desenvolvimento.
 
 Nenhuma conta, chave de API ou serviço remoto é necessário para a demo reproduzível.
 
@@ -148,6 +154,7 @@ Use somente com um aplicativo descartável criado para a apresentação. O modo 
 1. Defina a lista explícita:
 
    ```bash
+   export GUARDIAN_REAL_ENFORCEMENT_ENABLED=true
    export GUARDIAN_BLOCKABLE_APPS="Guardian Demo Chat"
    ```
 
@@ -176,7 +183,20 @@ O observer real está em `agent/observer.py`. A fixture é o caminho oficial da 
 .\.venv\Scripts\python.exe -m pytest
 ```
 
-Os testes cobrem classificação contextual segura e perigosa, separação entre classificação e política, deduplicação, evidência, contestação, desbloqueio, fila de comandos, telemetria e proteção contra bloqueio de aplicativo essencial.
+Para instalar e executar todos os checks de desenvolvimento:
+
+```bash
+pnpm install
+python scripts/validate_stage0.py
+python -m ruff check .
+python -m ruff format --check agent api guardian_core risk_engine scripts tests
+python -m pytest
+pnpm check:js
+pnpm lint:js
+pnpm format:check
+```
+
+Os testes cobrem classificação contextual segura e perigosa, release gates, configuração por ambiente, capacidades declaradas, versionamento de schema, deduplicação, evidência, contestação, desbloqueio, fila de comandos, telemetria e proteção contra bloqueio de aplicativo essencial.
 
 ## Rotas da interface
 
@@ -193,6 +213,8 @@ Os testes cobrem classificação contextual segura e perigosa, separação entre
 
 | Método e rota | Uso |
 |---|---|
+| `GET /api/health` | Saúde, ambiente e versões da aplicação/API |
+| `GET /api/capabilities` | Capacidades realmente ativas nesta versão |
 | `POST /api/incidents` | Agente registra avaliação e decisão |
 | `POST /api/incidents/:id/evidence` | Envia evidência mínima em corpo bruto |
 | `POST /api/incidents/:id/request-unlock` | Criança explica e solicita revisão |
@@ -210,9 +232,14 @@ As configurações podem ser fornecidas por variáveis de ambiente; `.env.exampl
 
 | Variável | Padrão | Descrição |
 |---|---|---|
+| `GUARDIAN_ENVIRONMENT` | `development` | Ambiente tipado da aplicação |
 | `GUARDIAN_API_URL` | `http://127.0.0.1:8000` | API consultada pelo agente |
 | `GUARDIAN_DB_PATH` | `.data/guardian.db` | Banco SQLite local |
 | `GUARDIAN_EVIDENCE_DIR` | `.data/evidence` | Evidências selecionadas |
+| `GUARDIAN_LOG_LEVEL` | `INFO` | Nível de log sem conteúdo bruto |
+| `GUARDIAN_AUTOMATIC_BLOCKING_ENABLED` | `true` na demo | Habilita bloqueio somente dentro dos gates |
+| `GUARDIAN_REAL_ENFORCEMENT_ENABLED` | `false` | Segunda confirmação para enforcement macOS real |
+| `GUARDIAN_RELEASE_GATE_APPROVED` | `false` | Gate obrigatório fora de desenvolvimento/teste |
 | `GUARDIAN_BLOCKABLE_APPS` | `Guardian Demo Chat` | Allowlist do enforcement real |
 
 Os dados de demonstração usam `child-demo` e `device-demo`. O banco, evidências e estado do agente ficam em `.data/`, ignorado pelo Git.
@@ -222,6 +249,7 @@ Os dados de demonstração usam `child-demo` e `device-demo`. O banco, evidênci
 - `RiskAssessment` não contém ação de enforcement.
 - Avaliações `SAFE` não podem criar incidentes.
 - Falha técnica é fail-open: gera erro/log, nunca um bloqueio novo.
+- Bloqueio fora de fixtures locais sofre downgrade para `ALERT` sem release gate aprovado.
 - Enforcement real exige flag e allowlist explícitas.
 - Aplicativos essenciais possuem denylist interna.
 - Evidências aceitam apenas PNG, JPEG, WebP ou texto, até 4 MB.
@@ -239,4 +267,4 @@ Este MVP não representa conformidade pronta para produção. Uso real com menor
 - Não há autenticação, notificações push, múltiplas famílias ou deploy público.
 - O hash atual é criptográfico; um perceptual hash deve substituí-lo antes de observação contínua.
 
-O documento [guardian_hackathon_context.md](guardian_hackathon_context.md) contém a visão completa do produto, posicionamento, escopo e cronograma do hackathon.
+O [ROADMAP.md](ROADMAP.md) acompanha a implementação até produção. O índice [docs/README.md](docs/README.md) reúne gates, threat model, mapa de dados, riscos, playbooks e decisões arquiteturais. O documento [guardian_hackathon_context.md](guardian_hackathon_context.md) preserva a visão completa do produto e o escopo original do hackathon.

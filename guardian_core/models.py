@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Annotated
 
@@ -8,7 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 def utc_now() -> datetime:
-    return datetime.now(timezone.utc)
+    return datetime.now(UTC)
 
 
 class RiskLevel(StrEnum):
@@ -40,6 +40,7 @@ class PolicyAction(StrEnum):
 class EnforcementAction(StrEnum):
     IGNORE = "IGNORE"
     LOG = "LOG"
+    ALERT = "ALERT"
     BLOCK = "BLOCK"
 
 
@@ -93,7 +94,7 @@ class RiskAssessment(BaseModel):
     explanation: str = Field(min_length=1, max_length=4000)
 
     @model_validator(mode="after")
-    def validate_safe_semantics(self) -> "RiskAssessment":
+    def validate_safe_semantics(self) -> RiskAssessment:
         if self.risk == RiskLevel.SAFE and (self.category is not None or self.direction is not None):
             raise ValueError("SAFE assessments cannot have category or direction")
         if self.risk != RiskLevel.SAFE and (self.category is None or self.direction is None):
@@ -216,3 +217,23 @@ class DailyReport(BaseModel):
     suspicious_events: int
     interventions: int
     evidence_count: int
+
+
+class ProductCapabilities(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    environment: str
+    api_version: str
+    fixture_analysis: bool
+    real_screen_observation: bool
+    local_ocr: bool
+    system_audio: bool
+    microphone: bool
+    camera: bool
+    simulated_enforcement: bool
+    real_macos_enforcement: bool
+    automatic_blocking_scope: str
+    authentication: bool
+    tenant_isolation: bool
+    production_ready: bool
+    notes: list[str]

@@ -81,40 +81,42 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 **Duração estimada:** 1–2 semanas  
 **Objetivo:** retirar ambiguidades antes de conectar captura real ou armazenar dados de usuários.
 
+**Status da etapa:** implementação concluída; revisão formal e branch protection pendentes.
+
 ## Épico 0.1 — Métricas e regras de lançamento
 
-- [ ] `R0-01` Definir eventos que podem resultar em `LOG`, `ALERT` e `BLOCK`.
-- [ ] `R0-02` Definir métricas por categoria: precisão, recall, falso bloqueio e taxa de contestação.
-- [ ] `R0-03` Definir orçamento de performance do agente: CPU, memória, bateria e volume de rede.
-- [ ] `R0-04` Definir SLO inicial da API e latência máxima de desbloqueio.
-- [ ] `R0-05` Definir quais categorias podem entrar no piloto somente como alerta.
-- [ ] `R0-06` Registrar a regra: nenhuma categoria entra em bloqueio automático sem gate de avaliação aprovado.
+- [x] `R0-01` Definir eventos que podem resultar em `LOG`, `ALERT` e `BLOCK`.
+- [x] `R0-02` Definir métricas por categoria: precisão, recall, falso bloqueio e taxa de contestação.
+- [x] `R0-03` Definir orçamento de performance do agente: CPU, memória, bateria e volume de rede.
+- [x] `R0-04` Definir SLO inicial da API e latência máxima de desbloqueio.
+- [x] `R0-05` Definir quais categorias podem entrar no piloto somente como alerta.
+- [x] `R0-06` Registrar a regra: nenhuma categoria entra em bloqueio automático sem gate de avaliação aprovado.
 
 ## Épico 0.2 — Threat model e mapa de dados
 
-- [ ] `R0-07` Modelar ameaças do agente, API, dashboard, evidências e canal de comandos.
-- [ ] `R0-08` Mapear cada dado coletado, finalidade, localização, acesso e prazo de retenção.
-- [ ] `R0-09` Definir comportamento para comprometimento da conta do responsável.
-- [ ] `R0-10` Definir comportamento para adulteração ou remoção do agente pela criança.
-- [ ] `R0-11` Definir resposta a vazamento de evidência e revogação de dispositivo.
-- [ ] `R0-12` Criar registro inicial de riscos e responsáveis por mitigação.
+- [x] `R0-07` Modelar ameaças do agente, API, dashboard, evidências e canal de comandos.
+- [x] `R0-08` Mapear cada dado coletado, finalidade, localização, acesso e prazo de retenção.
+- [x] `R0-09` Definir comportamento para comprometimento da conta do responsável.
+- [x] `R0-10` Definir comportamento para adulteração ou remoção do agente pela criança.
+- [x] `R0-11` Definir resposta a vazamento de evidência e revogação de dispositivo.
+- [x] `R0-12` Criar registro inicial de riscos e responsáveis por mitigação.
 
 ## Épico 0.3 — Engenharia básica
 
-- [ ] `R0-13` Configurar CI para testes, análise estática e validação de contratos.
-- [ ] `R0-14` Adicionar formatação e lint de Python e JavaScript.
-- [ ] `R0-15` Definir versionamento de API e política de migração de banco.
-- [ ] `R0-16` Criar ADRs para agente nativo, banco, armazenamento e protocolo do dispositivo.
-- [ ] `R0-17` Criar ambientes separados: desenvolvimento, staging e produção.
-- [ ] `R0-18` Remover da interface alegações de recursos ainda não implementados ou marcá-las como planejadas.
+- [x] `R0-13` Configurar CI para testes, análise estática e validação de contratos.
+- [x] `R0-14` Adicionar formatação e lint de Python e JavaScript.
+- [x] `R0-15` Definir versionamento de API e política de migração de banco.
+- [x] `R0-16` Criar ADRs para agente nativo, banco, armazenamento e protocolo do dispositivo.
+- [x] `R0-17` Criar ambientes separados: desenvolvimento, staging e produção.
+- [x] `R0-18` Remover da interface alegações de recursos ainda não implementados ou marcá-las como planejadas.
 
 ## Critérios de saída
 
-- Threat model revisado pela equipe.
-- Mapa de dados cobrindo captura, contexto, evidência, telemetria e auditoria.
-- Métricas e gates de bloqueio documentados.
-- CI obrigatório para merge.
-- Decisões arquiteturais principais registradas.
+- [ ] Threat model revisado pela equipe.
+- [x] Mapa de dados cobrindo captura, contexto, evidência, telemetria e auditoria.
+- [x] Métricas e gates de bloqueio documentados e aplicados no runtime.
+- [ ] CI obrigatório para merge — workflow criado; falta habilitar branch protection no GitHub.
+- [x] Decisões arquiteturais principais registradas.
 
 ---
 
@@ -456,11 +458,11 @@ As previsões assumem execução paralela das Etapas 1/2 e 3/4. Uma equipe menor
 
 ### P0
 
-- [ ] `R0-01` Definir ações e gates por categoria.
-- [ ] `R0-07` Criar threat model inicial.
-- [ ] `R0-08` Criar mapa de dados.
-- [ ] `R0-13` Configurar CI com os testes existentes.
-- [ ] `R0-18` Corrigir alegações de recursos não implementados na interface.
+- [x] `R0-01` Definir ações e gates por categoria.
+- [x] `R0-07` Criar threat model inicial.
+- [x] `R0-08` Criar mapa de dados.
+- [x] `R0-13` Configurar CI com os testes existentes.
+- [x] `R0-18` Corrigir alegações de recursos não implementados na interface.
 - [ ] `R1-01` Criar spike de ScreenCaptureKit em Swift.
 - [ ] `R1-02` Validar captura de app e janela ativos.
 - [ ] `R1-03` Validar OCR com Vision em fixture visual local.

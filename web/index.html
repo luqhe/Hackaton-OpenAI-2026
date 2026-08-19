@@ -1,12 +1,15 @@
 <!doctype html>
 <html lang="pt-BR">
   <head>
-    <meta charset="utf-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1">
-    <meta name="description" content="Guardian — proteção contextual e letramento digital para famílias.">
-    <meta name="theme-color" content="#143b32">
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Guardian — proteção contextual e letramento digital para famílias."
+    />
+    <meta name="theme-color" content="#143b32" />
     <title>Guardian · Family Safety</title>
-    <link rel="stylesheet" href="/static/styles.css">
+    <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/app.js" defer></script>
   </head>
   <body>
@@ -17,9 +20,15 @@
           <span>Guardian</span>
         </a>
         <nav class="nav" aria-label="Navegação principal">
-          <a href="/" data-route="dashboard"><span aria-hidden="true">⌂</span> Visão geral</a>
-          <a href="/child" data-route="child"><span aria-hidden="true">◉</span> Lucas</a>
-          <a href="/settings" data-route="settings"><span aria-hidden="true">⚙</span> Políticas</a>
+          <a href="/" data-route="dashboard"
+            ><span aria-hidden="true">⌂</span> Visão geral</a
+          >
+          <a href="/child" data-route="child"
+            ><span aria-hidden="true">◉</span> Lucas</a
+          >
+          <a href="/settings" data-route="settings"
+            ><span aria-hidden="true">⚙</span> Políticas</a
+          >
         </nav>
         <div class="sidebar-foot">
           <div class="mini-avatar" aria-hidden="true">MF</div>
@@ -33,16 +42,30 @@
             <p class="eyebrow" id="page-eyebrow">FAMÍLIA FERREIRA</p>
             <h1 id="page-title">Visão geral</h1>
           </div>
-          <div class="protection-pill"><span></span> Proteção ativa</div>
+          <div class="protection-pill demo" id="protection-status">
+            <span class="protection-dot" aria-hidden="true"></span>
+            <span class="protection-label">Verificando modo…</span>
+          </div>
         </header>
 
-        <div id="toast" class="toast" role="status" aria-live="polite" hidden></div>
+        <div
+          id="toast"
+          class="toast"
+          role="status"
+          aria-live="polite"
+          hidden
+        ></div>
         <section id="app" aria-live="polite">
-          <div class="loading-card"><span class="spinner" aria-hidden="true"></span> Carregando proteção…</div>
+          <div class="loading-card">
+            <span class="spinner" aria-hidden="true"></span> Carregando
+            proteção…
+          </div>
         </section>
       </main>
     </div>
-    <noscript>O dashboard do Guardian precisa de JavaScript para consultar a API local.</noscript>
+    <noscript
+      >O dashboard do Guardian precisa de JavaScript para consultar a API
+      local.</noscript
+    >
   </body>
 </html>
-

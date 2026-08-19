@@ -67,4 +67,3 @@ class GuardianAPIClient:
 
     def acknowledge_command(self, device_id: str, command_id: int) -> dict[str, Any]:
         return self._request("POST", f"/api/devices/{device_id}/commands/{command_id}/ack")
-

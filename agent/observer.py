@@ -43,4 +43,3 @@ class MacOSObserver:
         changed = digest != self._last_hash
         self._last_hash = digest
         return changed, digest
-

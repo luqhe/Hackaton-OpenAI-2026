@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from fastapi.testclient import TestClient
 
@@ -10,7 +10,7 @@ def incident_payload() -> dict:
         "child_id": "child-demo",
         "device_id": "device-demo",
         "application": "Guardian Demo Chat",
-        "occurred_at": datetime.now(timezone.utc).isoformat(),
+        "occurred_at": datetime.now(UTC).isoformat(),
         "assessment": {
             "risk": "HIGH",
             "category": "DANGEROUS_CONTACT",

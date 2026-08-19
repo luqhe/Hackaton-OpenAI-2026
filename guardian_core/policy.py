@@ -9,7 +9,6 @@ from guardian_core.models import (
     RiskLevel,
 )
 
-
 RISK_ORDER = {
     RiskLevel.SAFE: 0,
     RiskLevel.LOW: 1,
@@ -24,7 +23,9 @@ def apply_policy(assessment: RiskAssessment, rules: list[PolicyRule]) -> PolicyD
 
     rule = next((item for item in rules if item.category == assessment.category), None)
     if rule is None:
-        return PolicyDecision(action=EnforcementAction.LOG, reason="No matching parental policy; event logged")
+        return PolicyDecision(
+            action=EnforcementAction.LOG, reason="No matching parental policy; event logged"
+        )
 
     if RISK_ORDER[assessment.risk] < RISK_ORDER[rule.minimum_risk]:
         return PolicyDecision(
@@ -42,8 +43,7 @@ def apply_policy(assessment: RiskAssessment, rules: list[PolicyRule]) -> PolicyD
 
     action = {
         PolicyAction.ALLOW: EnforcementAction.IGNORE,
-        PolicyAction.ALERT: EnforcementAction.LOG,
+        PolicyAction.ALERT: EnforcementAction.ALERT,
         PolicyAction.BLOCK: EnforcementAction.BLOCK,
     }[rule.action]
     return PolicyDecision(action=action, matched_rule=rule, reason="Parental policy matched")
-

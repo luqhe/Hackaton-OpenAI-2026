@@ -9,10 +9,11 @@ from pathlib import Path
 
 from agent.client import GuardianAPIClient, GuardianAPIError
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
+from guardian_core.config import GuardianSettings
+from guardian_core.gates import apply_runtime_release_gate
 from guardian_core.models import IncidentCreate, Observation, PolicyRule, TelemetryUpdate
 from guardian_core.policy import apply_policy
 from risk_engine import assess_risk
-
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -30,9 +31,17 @@ def load_fixture(path: Path) -> tuple[Observation, str]:
     return observation, transcript
 
 
-def build_enforcer(real_enforcement: bool, state_path: Path) -> DemoEnforcer:
+def build_enforcer(
+    real_enforcement: bool,
+    state_path: Path,
+    settings: GuardianSettings,
+) -> DemoEnforcer:
     if not real_enforcement:
         return DemoEnforcer(state_path)
+    if not settings.real_enforcement_enabled:
+        raise ValueError(
+            "Real enforcement requires GUARDIAN_REAL_ENFORCEMENT_ENABLED=true in addition to the CLI flag"
+        )
     allowed = {
         item.strip()
         for item in os.getenv("GUARDIAN_BLOCKABLE_APPS", "Guardian Demo Chat").split(",")
@@ -42,12 +51,16 @@ def build_enforcer(real_enforcement: bool, state_path: Path) -> DemoEnforcer:
 
 
 def run_fixture(args: argparse.Namespace) -> int:
+    settings = GuardianSettings.from_env()
     client = GuardianAPIClient(args.api_url)
     observation, transcript = load_fixture(args.fixture)
     assessment = assess_risk(observation)
     rules = [PolicyRule.model_validate(item) for item in client.get_policy(args.child_id)]
     decision = apply_policy(assessment, rules)
-    print(f"assessment={assessment.risk} category={assessment.category} confidence={assessment.confidence:.2f}")
+    decision = apply_runtime_release_gate(decision, settings, fixture_input=True)
+    print(
+        f"assessment={assessment.risk} category={assessment.category} confidence={assessment.confidence:.2f}"
+    )
     print(f"decision={decision.action} reason={decision.reason}")
 
     client.record_telemetry(
@@ -64,9 +77,9 @@ def run_fixture(args: argparse.Namespace) -> int:
         print("No incident created.")
         return 0
 
-    enforcer = build_enforcer(args.real_enforcement, args.state_path)
+    enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
     deduplication_key = hashlib.sha256(
-        f"{args.device_id}|{observation.app_name}|{transcript}".encode("utf-8")
+        f"{args.device_id}|{observation.app_name}|{transcript}".encode()
     ).hexdigest()
     incident_payload = IncidentCreate(
         child_id=args.child_id,
@@ -147,8 +160,9 @@ def build_parser() -> argparse.ArgumentParser:
     poll.add_argument("--real-enforcement", action="store_true")
 
     def handle_poll(args: argparse.Namespace) -> int:
+        settings = GuardianSettings.from_env()
         client = GuardianAPIClient(args.api_url)
-        enforcer = build_enforcer(args.real_enforcement, args.state_path)
+        enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
         poll_commands(client, args.device_id, enforcer, args.poll_interval, args.once)
         return 0
 

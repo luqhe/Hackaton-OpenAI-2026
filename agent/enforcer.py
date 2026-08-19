@@ -5,7 +5,6 @@ import platform
 import subprocess
 from pathlib import Path
 
-
 NEVER_BLOCK = {
     "Finder",
     "System Settings",
@@ -74,7 +73,7 @@ class MacOSEnforcer(DemoEnforcer):
 
     def _quit(self, application: str) -> None:
         self._assert_allowed(application)
-        escaped = application.replace('\\', '\\\\').replace('"', '\\"')
+        escaped = application.replace("\\", "\\\\").replace('"', '\\"')
         script = f'tell application "{escaped}" to quit'
         subprocess.run(
             ["osascript", "-e", script],
@@ -91,4 +90,3 @@ class MacOSEnforcer(DemoEnforcer):
     def enforce(self) -> None:
         for application in tuple(self.blocked_apps):
             self._quit(application)
-

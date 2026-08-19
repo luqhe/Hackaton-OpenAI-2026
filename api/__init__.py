@@ -1,2 +1,1 @@
 """Guardian HTTP API package."""
-

@@ -5,7 +5,6 @@ from guardian_core.models import Observation, PolicyAction, PolicyRule, RiskCate
 from guardian_core.policy import apply_policy
 from risk_engine import assess_risk
 
-
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -50,3 +49,18 @@ def test_policy_engine_owns_the_block_decision() -> None:
     assert decision.action == "BLOCK"
     assert "action" not in assessment.model_dump()
 
+
+def test_parent_alert_policy_produces_an_alert_decision() -> None:
+    assessment = assess_risk(observation_from_fixture("dangerous_contact"))
+    decision = apply_policy(
+        assessment,
+        [
+            PolicyRule(
+                category=RiskCategory.DANGEROUS_CONTACT,
+                action=PolicyAction.ALERT,
+                minimum_risk=RiskLevel.HIGH,
+                minimum_confidence=0.75,
+            )
+        ],
+    )
+    assert decision.action == "ALERT"

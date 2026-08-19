@@ -1,2 +1,1 @@
 """Guardian edge-agent package."""
-

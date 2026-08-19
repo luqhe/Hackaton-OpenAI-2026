@@ -20,4 +20,3 @@ def test_demo_enforcer_refuses_essential_application(tmp_path) -> None:
     enforcer = DemoEnforcer(tmp_path / "state.json")
     with pytest.raises(ValueError):
         enforcer.block("Finder")
-

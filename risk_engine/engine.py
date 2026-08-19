@@ -4,7 +4,6 @@ import re
 
 from guardian_core.models import Observation, RiskAssessment, RiskCategory, RiskDirection, RiskLevel
 
-
 EDUCATIONAL_MARKERS = {
     "biology",
     "biologia",

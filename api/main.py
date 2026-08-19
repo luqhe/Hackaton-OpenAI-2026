@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import os
 import sqlite3
 from contextlib import asynccontextmanager
 from datetime import date
@@ -11,6 +10,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from api.storage import GuardianStore
+from guardian_core.config import GuardianSettings
 from guardian_core.models import (
     DailyReport,
     Device,
@@ -20,10 +20,11 @@ from guardian_core.models import (
     IncidentCreate,
     IncidentStatus,
     PolicyRule,
+    ProductCapabilities,
     TelemetryUpdate,
     UnlockRequest,
 )
-
+from guardian_core.version import API_VERSION, APP_VERSION
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 WEB_ROOT = PROJECT_ROOT / "web"
@@ -31,11 +32,14 @@ ALLOWED_EVIDENCE_TYPES = {"image/png", "image/jpeg", "image/webp", "text/plain"}
 MAX_EVIDENCE_BYTES = 4 * 1024 * 1024
 
 
-def create_app(database_path: Path | None = None, evidence_directory: Path | None = None) -> FastAPI:
-    db_path = database_path or Path(os.getenv("GUARDIAN_DB_PATH", PROJECT_ROOT / ".data" / "guardian.db"))
-    evidence_path = evidence_directory or Path(
-        os.getenv("GUARDIAN_EVIDENCE_DIR", PROJECT_ROOT / ".data" / "evidence")
-    )
+def create_app(
+    database_path: Path | None = None,
+    evidence_directory: Path | None = None,
+    settings: GuardianSettings | None = None,
+) -> FastAPI:
+    runtime_settings = settings or GuardianSettings.from_env()
+    db_path = database_path or runtime_settings.database_path
+    evidence_path = evidence_directory or runtime_settings.evidence_directory
     store = GuardianStore(db_path, evidence_path)
 
     @asynccontextmanager
@@ -45,11 +49,12 @@ def create_app(database_path: Path | None = None, evidence_directory: Path | Non
 
     app = FastAPI(
         title="Guardian API",
-        version="0.1.0",
+        version=APP_VERSION,
         description="Local control plane for the Guardian hackathon vertical slice.",
         lifespan=lifespan,
     )
     app.state.store = store
+    app.state.settings = runtime_settings
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -57,6 +62,7 @@ def create_app(database_path: Path | None = None, evidence_directory: Path | Non
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["Referrer-Policy"] = "no-referrer"
         response.headers["X-Frame-Options"] = "SAMEORIGIN"
+        response.headers["X-Guardian-API-Version"] = API_VERSION
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; connect-src 'self'; img-src 'self' data:; "
             "style-src 'self' 'unsafe-inline'; script-src 'self'; frame-src 'self'; "
@@ -66,7 +72,43 @@ def create_app(database_path: Path | None = None, evidence_directory: Path | Non
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
-        return {"status": "ok", "service": "guardian-api", "version": app.version}
+        return {
+            "status": "ok",
+            "service": "guardian-api",
+            "version": app.version,
+            "api_version": API_VERSION,
+            "environment": runtime_settings.environment,
+        }
+
+    @app.get("/api/capabilities", response_model=ProductCapabilities)
+    def capabilities() -> ProductCapabilities:
+        demo_scope = (
+            "FIXTURES_ONLY"
+            if runtime_settings.environment in {"development", "test"}
+            and runtime_settings.automatic_blocking_enabled
+            else "DISABLED"
+        )
+        return ProductCapabilities(
+            environment=runtime_settings.environment,
+            api_version=API_VERSION,
+            fixture_analysis=True,
+            real_screen_observation=False,
+            local_ocr=False,
+            system_audio=False,
+            microphone=False,
+            camera=False,
+            simulated_enforcement=True,
+            real_macos_enforcement=False,
+            automatic_blocking_scope=demo_scope,
+            authentication=False,
+            tenant_isolation=False,
+            production_ready=False,
+            notes=[
+                "Current observation input is limited to controlled fixtures.",
+                "Real macOS observation, OCR, authentication and tenant isolation are not implemented.",
+                "The real-enforcement setting is an authorization gate, not proof of an active agent.",
+            ],
+        )
 
     @app.post("/api/devices/pair", response_model=Device, status_code=status.HTTP_201_CREATED)
     def pair_device(payload: DevicePairRequest) -> Device:
@@ -88,7 +130,9 @@ def create_app(database_path: Path | None = None, evidence_directory: Path | Non
         return store.get_policy(child_id)
 
     @app.put("/api/children/{child_id}/policy", response_model=list[PolicyRule])
-    def replace_policy(child_id: str, rules: list[PolicyRule] = Body(min_length=1, max_length=20)) -> list[PolicyRule]:
+    def replace_policy(
+        child_id: str, rules: list[PolicyRule] = Body(min_length=1, max_length=20)
+    ) -> list[PolicyRule]:
         if not store.child_exists(child_id):
             raise HTTPException(status_code=404, detail="Child not found")
         if len({rule.category for rule in rules}) != len(rules):

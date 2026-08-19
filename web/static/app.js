@@ -2,6 +2,9 @@ const app = document.querySelector("#app");
 const pageTitle = document.querySelector("#page-title");
 const pageEyebrow = document.querySelector("#page-eyebrow");
 const toast = document.querySelector("#toast");
+const protectionStatus = document.querySelector("#protection-status");
+const protectionLabel = protectionStatus.querySelector(".protection-label");
+let productCapabilities = null;
 
 const labels = {
   DANGEROUS_CONTACT: "Contato potencialmente perigoso",
@@ -38,7 +41,9 @@ async function api(path, options = {}) {
   });
   if (!response.ok) {
     let message = "Não foi possível concluir a operação.";
-    try { message = (await response.json()).detail || message; } catch (_) {}
+    try {
+      message = (await response.json()).detail || message;
+    } catch {}
     throw new Error(message);
   }
   return response.status === 204 ? null : response.json();
@@ -48,7 +53,9 @@ function notify(message) {
   toast.textContent = message;
   toast.hidden = false;
   window.clearTimeout(notify.timer);
-  notify.timer = window.setTimeout(() => { toast.hidden = true; }, 3200);
+  notify.timer = window.setTimeout(() => {
+    toast.hidden = true;
+  }, 3200);
 }
 
 function setPage(title, eyebrow, route) {
@@ -60,6 +67,14 @@ function setPage(title, eyebrow, route) {
   });
 }
 
+function updateCapabilityStatus(capabilities) {
+  const observationActive = capabilities.real_screen_observation;
+  protectionStatus.classList.toggle("demo", !observationActive);
+  protectionLabel.textContent = observationActive
+    ? "Proteção ativa"
+    : "Demonstração local";
+}
+
 function formatDuration(totalSeconds) {
   const seconds = Number(totalSeconds || 0);
   const hours = Math.floor(seconds / 3600);
@@ -68,7 +83,12 @@ function formatDuration(totalSeconds) {
 }
 
 function formatDate(value) {
-  return new Intl.DateTimeFormat("pt-BR", { day: "2-digit", month: "short", hour: "2-digit", minute: "2-digit" }).format(new Date(value));
+  return new Intl.DateTimeFormat("pt-BR", {
+    day: "2-digit",
+    month: "short",
+    hour: "2-digit",
+    minute: "2-digit",
+  }).format(new Date(value));
 }
 
 function incidentRow(incident) {
@@ -86,22 +106,30 @@ function incidentRow(incident) {
 async function dashboard() {
   setPage("Visão geral", "FAMÍLIA FERREIRA", "dashboard");
   const [incidents, report, device] = await Promise.all([
-    api("/incidents"), api("/daily-report"), api("/devices/device-demo"),
+    api("/incidents"),
+    api("/daily-report"),
+    api("/devices/device-demo"),
   ]);
   const latest = incidents.length
     ? incidents.slice(0, 5).map(incidentRow).join("")
-    : `<div class="empty"><div class="empty-mark">✓</div><h3>Nenhum incidente hoje</h3><p>O Guardian continuará analisando mudanças relevantes sem armazenar continuamente a tela.</p></div>`;
+    : `<div class="empty"><div class="empty-mark">✓</div><h3>Nenhum incidente hoje</h3><p>${productCapabilities.real_screen_observation ? "O Guardian continuará analisando mudanças relevantes sem armazenar continuamente a tela." : "Execute uma fixture controlada para demonstrar a análise contextual local."}</p></div>`;
+  const deviceStatus = productCapabilities.real_screen_observation
+    ? `<strong>● Protegido</strong><span>Observação real ativa</span>`
+    : `<strong>◌ Modo de demonstração</strong><span>Entrada por fixtures controladas</span>`;
+  const observationLabel = productCapabilities.real_screen_observation
+    ? "Mudanças analisadas"
+    : "Observações da demo";
   app.innerHTML = `
     <div class="card profile-strip">
       <div class="avatar">L</div>
       <div class="profile-copy"><h2>Lucas</h2><p>${escapeHtml(device.name)} · ${escapeHtml(device.platform)}</p></div>
-      <div class="device-state"><strong>● Protegido</strong><span>Agente pareado</span></div>
+      <div class="device-state">${deviceStatus}</div>
     </div>
     <div class="section-heading"><h2>Hoje</h2><span></span></div>
     <div class="grid metrics">
       <div class="card metric"><span class="metric-label">Tempo de tela</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Uso agregado no dispositivo</span></div>
       <div class="card metric"><span class="metric-label">Incidentes de segurança</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">${report.interventions} intervenções realizadas</span></div>
-      <div class="card metric"><span class="metric-label">Mudanças analisadas</span><strong class="metric-value">${report.screen_changes}</strong><span class="metric-detail">Dados brutos descartados quando seguros</span></div>
+      <div class="card metric"><span class="metric-label">${observationLabel}</span><strong class="metric-value">${report.screen_changes}</strong><span class="metric-detail">Fixtures e telemetria local do MVP</span></div>
     </div>
     <div class="grid two">
       <div>
@@ -112,8 +140,8 @@ async function dashboard() {
         <div class="section-heading"><h2>Como o Guardian decide</h2></div>
         <div class="card insight">
           <p class="eyebrow">CONTEXTO, NÃO PALAVRAS ISOLADAS</p>
-          <h2>Proteção que entende a experiência digital.</h2>
-          <p>Imagem + texto + histórico recente + política familiar.</p>
+          <h2>Arquitetura preparada para entender contexto.</h2>
+          <p>Demo atual: fixture + texto + histórico recente + política familiar. Captura e OCR reais são a próxima etapa.</p>
           <div class="signal-row" aria-label="Quatro sinais contextuais ativos"><span class="on"></span><span class="on"></span><span class="on"></span><span></span></div>
         </div>
       </div>
@@ -159,12 +187,16 @@ async function incidentDetail(id) {
       </aside>
     </div>`;
   document.querySelector("#unlock")?.addEventListener("click", async () => {
-    await api(`/incidents/${encodeURIComponent(id)}/unlock`, { method: "POST" });
+    await api(`/incidents/${encodeURIComponent(id)}/unlock`, {
+      method: "POST",
+    });
     notify("Comando de desbloqueio enviado ao dispositivo.");
     await incidentDetail(id);
   });
   document.querySelector("#keep")?.addEventListener("click", async () => {
-    await api(`/incidents/${encodeURIComponent(id)}/keep-blocked`, { method: "POST" });
+    await api(`/incidents/${encodeURIComponent(id)}/keep-blocked`, {
+      method: "POST",
+    });
     notify("O bloqueio foi mantido.");
     await incidentDetail(id);
   });
@@ -183,12 +215,16 @@ async function childPage() {
         <p class="eyebrow">INTERVENÇÃO DO GUARDIAN</p>
         <h2>${escapeHtml(incident.application)} foi temporariamente bloqueado.</h2>
         <p>${escapeHtml(incident.explanation)} Não compartilhe escola, endereço, fotos privadas ou outros dados pessoais com quem você não conhece.</p>
-        ${["BLOCKED", "UNLOCK_REQUESTED"].includes(incident.status) ? `
+        ${
+          ["BLOCKED", "UNLOCK_REQUESTED"].includes(incident.status)
+            ? `
           <form class="request-form" id="unlock-form">
             <label for="explanation">Explique a situação ao seu responsável</label>
             <textarea id="explanation" minlength="3" maxlength="1000" required placeholder="Ex.: É um amigo da minha escola.">${escapeHtml(incident.child_explanation || "")}</textarea>
             <button class="button secondary" type="submit">Solicitar revisão</button>
-          </form>` : `<p><strong>${escapeHtml(labels[incident.status] || incident.status)}</strong></p>`}
+          </form>`
+            : `<p><strong>${escapeHtml(labels[incident.status] || incident.status)}</strong></p>`
+        }
       </section>`;
   }
   const maxSeconds = Math.max(...report.apps.map((item) => item.seconds), 1);
@@ -204,26 +240,29 @@ async function childPage() {
       <section>
         <div class="section-heading"><h2>Aplicativos hoje</h2></div>
         <div class="card card-pad">
-          <div class="usage-list">${report.apps.length ? report.apps.map((item) => `<div class="usage-row"><strong>${escapeHtml(item.app)}</strong><span class="bar"><span style="width:${Math.round(item.seconds / maxSeconds * 100)}%"></span></span><span>${formatDuration(item.seconds)}</span></div>`).join("") : `<p class="lead">Nenhuma sessão de uso agregada ainda.</p>`}</div>
+          <div class="usage-list">${report.apps.length ? report.apps.map((item) => `<div class="usage-row"><strong>${escapeHtml(item.app)}</strong><span class="bar"><span style="width:${Math.round((item.seconds / maxSeconds) * 100)}%"></span></span><span>${formatDuration(item.seconds)}</span></div>`).join("") : `<p class="lead">Nenhuma sessão de uso agregada ainda.</p>`}</div>
         </div>
       </section>
       <section>
         <div class="section-heading"><h2>O que está visível</h2></div>
         <div class="card card-pad privacy-grid">
-          <div><h3>Guardian pode acessar</h3><ul class="check-list"><li>Tela atual</li><li>Texto visível</li><li>Áudio do sistema quando necessário</li><li class="no">Microfone</li><li class="no">Câmera</li></ul></div>
+          <div><h3>Ativo nesta versão</h3><ul class="check-list"><li>Fixtures controladas da demonstração</li><li>Texto fornecido pelas fixtures</li><li class="no">Captura da tela real — planejada</li><li class="no">OCR local — planejado</li><li class="no">Áudio do sistema — não implementado</li><li class="no">Microfone — não coletado</li><li class="no">Câmera — não coletada</li></ul></div>
           <div><h3>Seu responsável pode acessar</h3><ul class="check-list"><li>Incidentes de segurança</li><li>Uso diário por aplicativo</li><li>Evidência mínima</li><li class="no">Tela ao vivo</li><li class="no">Microfone ou câmera</li></ul></div>
         </div>
       </section>
     </div>`;
-  document.querySelector("#unlock-form")?.addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const explanation = document.querySelector("#explanation").value.trim();
-    await api(`/incidents/${encodeURIComponent(incidentId)}/request-unlock`, {
-      method: "POST", body: JSON.stringify({ explanation }),
+  document
+    .querySelector("#unlock-form")
+    ?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const explanation = document.querySelector("#explanation").value.trim();
+      await api(`/incidents/${encodeURIComponent(incidentId)}/request-unlock`, {
+        method: "POST",
+        body: JSON.stringify({ explanation }),
+      });
+      notify("Sua explicação foi enviada ao responsável.");
+      await childPage();
     });
-    notify("Sua explicação foi enviada ao responsável.");
-    await childPage();
-  });
 }
 
 async function settingsPage() {
@@ -234,7 +273,9 @@ async function settingsPage() {
       <p class="lead">Defina como o Guardian deve agir quando identifica um risco com confiança alta. A classificação nunca controla o dispositivo diretamente; estas regras determinísticas tomam a decisão.</p>
       <div class="section-heading"><h2>Categorias</h2></div>
       <form id="policy-form">
-        <div class="policy-list">${rules.map((rule) => `
+        <div class="policy-list">${rules
+          .map(
+            (rule) => `
           <label class="policy-row">
             <span><strong>${escapeHtml(labels[rule.category] || rule.category)}</strong><span>${escapeHtml(policyDescriptions[rule.category] || "Regra personalizada")}</span></span>
             <select data-category="${escapeHtml(rule.category)}" aria-label="Ação para ${escapeHtml(labels[rule.category] || rule.category)}">
@@ -242,24 +283,35 @@ async function settingsPage() {
               <option value="ALERT" ${rule.action === "ALERT" ? "selected" : ""}>Somente alertar</option>
               <option value="BLOCK" ${rule.action === "BLOCK" ? "selected" : ""}>Bloquear</option>
             </select>
-          </label>`).join("")}</div>
+          </label>`,
+          )
+          .join("")}</div>
         <div class="action-bar"><button class="button primary" type="submit">Salvar políticas</button></div>
       </form>
     </div>`;
-  document.querySelector("#policy-form").addEventListener("submit", async (event) => {
-    event.preventDefault();
-    const updated = rules.map((rule) => ({
-      ...rule,
-      action: document.querySelector(`[data-category="${rule.category}"]`).value,
-    }));
-    await api("/children/child-demo/policy", { method: "PUT", body: JSON.stringify(updated) });
-    notify("Políticas atualizadas.");
-  });
+  document
+    .querySelector("#policy-form")
+    .addEventListener("submit", async (event) => {
+      event.preventDefault();
+      const updated = rules.map((rule) => ({
+        ...rule,
+        action: document.querySelector(`[data-category="${rule.category}"]`)
+          .value,
+      }));
+      await api("/children/child-demo/policy", {
+        method: "PUT",
+        body: JSON.stringify(updated),
+      });
+      notify("Políticas atualizadas.");
+    });
 }
 
 async function route() {
+  productCapabilities = await api("/capabilities");
+  updateCapabilityStatus(productCapabilities);
   const path = location.pathname;
-  if (path.startsWith("/incidents/")) return incidentDetail(decodeURIComponent(path.split("/").pop()));
+  if (path.startsWith("/incidents/"))
+    return incidentDetail(decodeURIComponent(path.split("/").pop()));
   if (path === "/child") return childPage();
   if (path === "/settings") return settingsPage();
   return dashboard();
