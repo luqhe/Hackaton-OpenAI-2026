@@ -122,3 +122,12 @@ class MacOSObserver:
         )
         self._last_hash = digest
         return changed, digest
+
+    def capture_if_changed(self, destination: Path) -> tuple[Path, str] | None:
+        """Capture one frame and discard it immediately when the screen is static."""
+        screenshot_path = self.capture_screen(destination)
+        changed, digest = self.detect_change(screenshot_path)
+        if not changed:
+            screenshot_path.unlink(missing_ok=True)
+            return None
+        return screenshot_path, digest

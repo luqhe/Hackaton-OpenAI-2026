@@ -139,7 +139,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 ## Épico 1.2 — Observação adaptativa
 
 - [x] `R1-08` Substituir SHA-256 por perceptual hash ou diferença visual adequada.
-- [ ] `R1-09` Ignorar telas estáticas e alterações irrelevantes.
+- [x] `R1-09` Ignorar telas estáticas e alterações irrelevantes.
 - [ ] `R1-10` Implementar intervalo configurável e backoff por inatividade.
 - [ ] `R1-11` Construir context buffer por aplicativo e sessão.
 - [ ] `R1-12` Limitar o buffer a 1–2 minutos ou 5–10 observações significativas.

@@ -86,3 +86,21 @@ def test_perceptual_hash_detects_meaningful_layout_change(monkeypatch, tmp_path:
 
     assert is_changed is True
     assert PerceptualHash.distance(first_hash, second_hash) > 8
+
+
+def test_static_capture_is_deleted_before_analysis(monkeypatch, tmp_path: Path) -> None:
+    observer = build_observer(monkeypatch, clock=lambda: 0.0)
+    source = Image.new("L", (80, 80), color=255)
+
+    def capture(destination: Path) -> Path:
+        source.save(destination)
+        return destination
+
+    monkeypatch.setattr(observer, "capture_screen", capture)
+    first_path = tmp_path / "first.png"
+    static_path = tmp_path / "static.png"
+
+    assert observer.capture_if_changed(first_path) is not None
+    assert observer.capture_if_changed(static_path) is None
+    assert first_path.exists()
+    assert not static_path.exists()
