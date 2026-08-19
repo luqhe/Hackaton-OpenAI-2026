@@ -1,6 +1,7 @@
 from scripts.validate_pilot_readiness import (
     activation_blockers,
     validate_legal_package,
+    validate_operational_readiness,
     validate_protocol,
     validate_support_training,
 )
@@ -27,7 +28,13 @@ def test_activation_gate_stays_closed_until_real_approvals_are_recorded() -> Non
         "PRODUCT_SAFETY",
     }
     assert "support training roster is not complete" in blockers
+    assert "operational alert delivery is not active" in blockers
+    assert "on-call roster and drill are not active" in blockers
 
 
 def test_support_training_is_complete_but_roster_is_honestly_pending() -> None:
     assert validate_support_training() == []
+
+
+def test_operational_rules_are_valid_without_claiming_live_paging() -> None:
+    assert validate_operational_readiness() == []

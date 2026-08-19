@@ -2,10 +2,15 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from guardian_core.operations import load_alert_rules  # noqa: E402
 
 
 def _load_json(relative_path: str) -> dict[str, Any]:
@@ -132,6 +137,48 @@ def validate_support_training() -> list[str]:
     return errors
 
 
+def validate_operational_readiness() -> list[str]:
+    errors: list[str] = []
+    alerts_path = ROOT / "config/pilot/alerts.v1.json"
+    on_call_path = ROOT / "config/pilot/on-call.v1.json"
+    operations_path = ROOT / "docs/pilot/operations.md"
+    for path in (alerts_path, on_call_path, operations_path):
+        if not path.is_file():
+            errors.append(f"missing pilot operations artifact: {path.relative_to(ROOT)}")
+    if errors:
+        return errors
+
+    alerts = _load_json("config/pilot/alerts.v1.json")
+    on_call = _load_json("config/pilot/on-call.v1.json")
+    if alerts.get("alerts_active") is not False:
+        errors.append("alerts cannot be active before an external delivery integration and drill")
+    try:
+        rules = load_alert_rules(alerts_path)
+    except (ValueError, TypeError) as error:
+        errors.append(f"invalid pilot alert configuration: {error}")
+        rules = []
+    expected_metrics = {
+        "cross_family_access_events",
+        "prohibited_collection_events",
+        "api_availability_percent",
+        "command_ack_latency_p95_ms",
+        "heartbeat_age_max_seconds",
+        "offline_queue_depth_max",
+        "family_deletion_failures",
+    }
+    if {rule.metric for rule in rules} != expected_metrics:
+        errors.append("pilot alerts do not cover all required operational metrics")
+    if on_call.get("roster_active") is not False:
+        errors.append("on-call roster cannot be active without real rotations")
+    if on_call.get("rotations") != []:
+        errors.append("on-call configuration must not contain fabricated rotations")
+    if set(on_call.get("required_roles", [])) != {"PRIMARY", "SECONDARY", "SECURITY", "PRIVACY"}:
+        errors.append("on-call configuration must require primary, secondary, security and privacy")
+    if on_call.get("last_drill_at") is not None or on_call.get("last_drill_result") is not None:
+        errors.append("on-call configuration cannot claim an unperformed drill")
+    return errors
+
+
 def activation_blockers() -> list[str]:
     blockers: list[str] = []
     protocol = _load_json("config/pilot/protocol.v1.json")
@@ -146,6 +193,12 @@ def activation_blockers() -> list[str]:
     training = _load_json("config/pilot/support-training.v1.json")
     if training.get("training_complete") is not True:
         blockers.append("support training roster is not complete")
+    alerts = _load_json("config/pilot/alerts.v1.json")
+    on_call = _load_json("config/pilot/on-call.v1.json")
+    if alerts.get("alerts_active") is not True:
+        blockers.append("operational alert delivery is not active")
+    if on_call.get("roster_active") is not True:
+        blockers.append("on-call roster and drill are not active")
     return blockers
 
 
@@ -157,7 +210,12 @@ def main() -> int:
         help="fail unless all external approvals and pilot enablement are recorded",
     )
     args = parser.parse_args()
-    errors = validate_protocol() + validate_legal_package() + validate_support_training()
+    errors = (
+        validate_protocol()
+        + validate_legal_package()
+        + validate_support_training()
+        + validate_operational_readiness()
+    )
     if errors:
         for error in errors:
             print(f"ERROR: {error}")
