@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from fastapi.testclient import TestClient
 
 from api.main import create_app
 from scripts.delete_pilot_family import delete_with_confirmation
+from scripts.delete_pilot_family import main as delete_cli_main
 
 
 def incident_payload() -> dict:
@@ -204,7 +206,7 @@ def test_staging_failure_preserves_family_and_is_operationally_visible(monkeypat
         assert metrics["family_deletion_failures"] == 1
         with sqlite3.connect(database) as connection:
             status = connection.execute("SELECT status FROM family_deletion_receipts").fetchone()[0]
-        assert status == "FAILED_STORAGE_CLEANUP"
+        assert status == "FAILED_DATABASE"
 
 
 def test_v1_database_migrates_family_id_to_not_null_cascading_foreign_key(tmp_path) -> None:
@@ -270,7 +272,15 @@ def test_database_and_restore_failures_leave_terminal_resumable_receipt(monkeypa
     app = create_app(database, evidence_directory)
     with TestClient(app) as client:
         _, evidence_id = seed_family_scope(client)
-        evidence_path, _ = app.state.store.get_evidence(evidence_id)
+        root_evidence_path, _ = app.state.store.get_evidence(evidence_id)
+        evidence_path = evidence_directory / "nested" / root_evidence_path.name
+        evidence_path.parent.mkdir(parents=True)
+        root_evidence_path.replace(evidence_path)
+        with sqlite3.connect(database) as connection:
+            connection.execute(
+                "UPDATE incident_evidence SET file_path = ? WHERE id = ?",
+                (str(evidence_path), evidence_id),
+            )
         original_replace = Path.replace
 
         def fail_verification(*_args, **_kwargs) -> None:
@@ -301,10 +311,13 @@ def test_database_and_restore_failures_leave_terminal_resumable_receipt(monkeypa
         receipt = app.state.store.resume_family_deletion(receipt_id)
         assert receipt.status == "FAILED_DATABASE"
         assert evidence_path.is_file()
+        assert not root_evidence_path.exists()
+        restored_path, _ = app.state.store.get_evidence(evidence_id)
+        assert restored_path == evidence_path.resolve()
         assert not Path(staging).exists()
 
 
-def test_storage_cleanup_failure_can_resume_to_completion(monkeypatch, tmp_path) -> None:
+def test_storage_cleanup_failure_can_resume_via_cli_after_restart(monkeypatch, tmp_path) -> None:
     database = tmp_path / "guardian.db"
     evidence_directory = tmp_path / "evidence"
     app = create_app(database, evidence_directory)
@@ -329,8 +342,36 @@ def test_storage_cleanup_failure_can_resume_to_completion(monkeypatch, tmp_path)
         assert status == "FAILED_STORAGE_CLEANUP"
         assert staging is not None
 
-        monkeypatch.setattr(Path, "unlink", original_unlink)
-        receipt = app.state.store.resume_family_deletion(receipt_id)
-        assert receipt.status == "COMPLETED"
-        assert receipt.completed_at is not None
-        assert not Path(staging).exists()
+    monkeypatch.setattr(Path, "unlink", original_unlink)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "delete_pilot_family.py",
+            "--database",
+            str(database),
+            "--evidence-directory",
+            str(evidence_directory),
+            "--resume-receipt",
+            receipt_id,
+            "--confirm-receipt-id",
+            receipt_id,
+        ],
+    )
+    assert delete_cli_main() == 0
+    assert not Path(staging).exists()
+    with sqlite3.connect(database) as connection:
+        status, completed_at = connection.execute(
+            "SELECT status, completed_at FROM family_deletion_receipts WHERE id = ?",
+            (receipt_id,),
+        ).fetchone()
+        assert status == "COMPLETED"
+        assert completed_at is not None
+        assert connection.execute("SELECT COUNT(*) FROM families").fetchone()[0] == 0
+
+    restarted_again = create_app(database, evidence_directory)
+    with TestClient(restarted_again) as client:
+        assert not restarted_again.state.store.child_exists("child-demo")
+        with sqlite3.connect(database) as connection:
+            assert connection.execute("SELECT COUNT(*) FROM families").fetchone()[0] == 0
+        assert client.get("/api/children/child-demo/policy").status_code == 404

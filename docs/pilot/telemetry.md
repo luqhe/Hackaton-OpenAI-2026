@@ -37,6 +37,9 @@ máxima. Ausência de amostra resulta em `null`, nunca em saúde de 100%.
 são rejeitados em vez de virarem idade zero. Heartbeat recebido com mais de 90 segundos já entra
 como `DEGRADED`, mesmo que permissões e observer sejam declarados saudáveis.
 
+O mesmo limite futuro de 30 segundos vale para `occurred_at` do onboarding, evitando eventos
+adiantados que contaminem a janela de métricas ou impeçam a progressão posterior da sessão.
+
 ## Latência de comando
 
 A latência E2E usa timestamps persistidos:

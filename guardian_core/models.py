@@ -231,6 +231,8 @@ class PilotOnboardingEventCreate(BaseModel):
     def validate_occurred_at(self) -> PilotOnboardingEventCreate:
         if self.occurred_at.utcoffset() is None:
             raise ValueError("Onboarding occurred_at must include a timezone")
+        if self.occurred_at > utc_now() + timedelta(seconds=30):
+            raise ValueError("Onboarding occurred_at exceeds the 30-second clock-skew allowance")
         return self
 
 

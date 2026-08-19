@@ -133,6 +133,14 @@ def test_onboarding_requires_canonical_monotonic_progression(tmp_path) -> None:
                 occurred_at=base.isoformat(),
             ),
         )
+        far_future = client.post(
+            "/api/pilot/onboarding-events",
+            json=onboarding_payload(
+                session_id="session-future-start",
+                idempotency_key="future-start-is-invalid",
+                occurred_at=(base + timedelta(days=3650)).isoformat(),
+            ),
+        )
         responses = []
         for index, stage in enumerate(stages):
             responses.append(
@@ -166,6 +174,7 @@ def test_onboarding_requires_canonical_monotonic_progression(tmp_path) -> None:
         )
 
     assert direct_shadow.status_code == 409
+    assert far_future.status_code == 422
     assert [response.status_code for response in responses] == [201] * len(stages)
     assert non_monotonic.status_code == 409
 

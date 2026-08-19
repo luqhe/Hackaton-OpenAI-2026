@@ -229,9 +229,14 @@ class GuardianStore:
             demo_deleted = connection.execute(
                 """
                 SELECT 1 FROM family_deletion_receipts
-                WHERE family_reference_sha256 = ? AND status = ?
+                WHERE family_reference_sha256 = ? AND status IN (?, ?, ?)
                 """,
-                (demo_reference, FamilyDeletionStatus.COMPLETED),
+                (
+                    demo_reference,
+                    FamilyDeletionStatus.COMPLETED,
+                    FamilyDeletionStatus.DATABASE_DELETED,
+                    FamilyDeletionStatus.FAILED_STORAGE_CLEANUP,
+                ),
             ).fetchone()
             if demo_deleted is None:
                 connection.execute(
@@ -283,6 +288,7 @@ class GuardianStore:
     def _ensure_family_schema(connection: sqlite3.Connection, now: str) -> None:
         columns = {row["name"]: row for row in connection.execute("PRAGMA table_info(children)").fetchall()}
         has_family_id = "family_id" in columns
+        needs_demo_family = False
         if has_family_id:
             family_ids = [
                 row["family_id"]
@@ -295,10 +301,17 @@ class GuardianStore:
                     "INSERT OR IGNORE INTO families(id, name, created_at) VALUES (?, ?, ?)",
                     (family_id, "Migrated family", now),
                 )
-        connection.execute(
-            "INSERT OR IGNORE INTO families(id, name, created_at) VALUES (?, ?, ?)",
-            ("family-demo", "Família Demo", now),
-        )
+            needs_demo_family = (
+                connection.execute("SELECT 1 FROM children WHERE family_id IS NULL LIMIT 1").fetchone()
+                is not None
+            )
+        else:
+            needs_demo_family = connection.execute("SELECT 1 FROM children LIMIT 1").fetchone() is not None
+        if needs_demo_family:
+            connection.execute(
+                "INSERT OR IGNORE INTO families(id, name, created_at) VALUES (?, ?, ?)",
+                ("family-demo", "Família Demo", now),
+            )
 
         family_foreign_key = next(
             (
@@ -565,6 +578,17 @@ class GuardianStore:
     def _placeholders(values: list[str]) -> str:
         return ",".join("?" for _ in values)
 
+    @staticmethod
+    def _remove_empty_staging_directories(staging_directory: Path) -> None:
+        directories = sorted(
+            (path for path in staging_directory.rglob("*") if path.is_dir()),
+            key=lambda path: len(path.parts),
+            reverse=True,
+        )
+        for directory in directories:
+            directory.rmdir()
+        staging_directory.rmdir()
+
     def _deletion_counts(
         self,
         connection: sqlite3.Connection,
@@ -768,7 +792,8 @@ class GuardianStore:
             if source_files:
                 staging_directory.mkdir(parents=True, exist_ok=False)
                 for source in source_files:
-                    staged = staging_directory / source.name
+                    staged = staging_directory / source.relative_to(evidence_root)
+                    staged.parent.mkdir(parents=True, exist_ok=True)
                     source.replace(staged)
                     staged_files.append((source, staged))
                 self._set_deletion_status(
@@ -777,19 +802,33 @@ class GuardianStore:
                     staging_directory=staging_directory,
                 )
         except OSError as error:
+            restore_errors: list[OSError] = []
             for source, staged in staged_files:
                 if staged.is_file():
-                    staged.replace(source)
+                    if source.exists():
+                        restore_errors.append(FileExistsError(source.name))
+                        continue
+                    source.parent.mkdir(parents=True, exist_ok=True)
+                    try:
+                        staged.replace(source)
+                    except OSError as restore_error:
+                        restore_errors.append(restore_error)
             if staging_directory.is_dir():
                 try:
-                    staging_directory.rmdir()
+                    self._remove_empty_staging_directories(staging_directory)
                 except OSError:
                     pass
             self._set_deletion_status(
                 receipt_id,
-                FamilyDeletionStatus.FAILED_STORAGE_CLEANUP,
+                FamilyDeletionStatus.FAILED_DATABASE,
                 staging_directory=staging_directory if staging_directory.exists() else None,
             )
+            if restore_errors:
+                error_types = ", ".join(type(item).__name__ for item in restore_errors)
+                raise RuntimeError(
+                    "Unable to stage family evidence and staging rollback was incomplete "
+                    f"({len(restore_errors)} restore error(s): {error_types})"
+                ) from error
             raise RuntimeError("Unable to stage family evidence for deletion") from error
 
         try:
@@ -839,13 +878,17 @@ class GuardianStore:
             restore_errors: list[OSError] = []
             for source, staged in staged_files:
                 if staged.is_file():
+                    if source.exists():
+                        restore_errors.append(FileExistsError(source.name))
+                        continue
+                    source.parent.mkdir(parents=True, exist_ok=True)
                     try:
                         staged.replace(source)
                     except OSError as restore_error:
                         restore_errors.append(restore_error)
             if staging_directory.is_dir():
                 try:
-                    staging_directory.rmdir()
+                    self._remove_empty_staging_directories(staging_directory)
                 except OSError:
                     pass
             self._set_deletion_status(
@@ -865,7 +908,7 @@ class GuardianStore:
             for _, staged in staged_files:
                 staged.unlink(missing_ok=True)
             if staging_directory.is_dir():
-                staging_directory.rmdir()
+                self._remove_empty_staging_directories(staging_directory)
             staging_root = evidence_root / ".deletion-staging"
             if staging_root.is_dir():
                 try:
@@ -926,27 +969,37 @@ class GuardianStore:
         if staging_directory.parent != staging_root or staging_directory.name != receipt_id:
             raise ValueError("Deletion receipt staging directory is outside the configured staging root")
 
-        entries = list(staging_directory.iterdir()) if staging_directory.is_dir() else []
+        entries = list(staging_directory.rglob("*")) if staging_directory.is_dir() else []
+        staged_files: list[Path] = []
         for entry in entries:
-            if entry.is_symlink() or not entry.is_file() or entry.resolve().parent != staging_directory:
+            resolved_entry = entry.resolve()
+            if (
+                entry.is_symlink()
+                or staging_directory not in resolved_entry.parents
+                or (not entry.is_file() and not entry.is_dir())
+            ):
                 raise ValueError("Deletion staging contains an unsupported entry")
+            if entry.is_file():
+                staged_files.append(entry)
 
         if status == FamilyDeletionStatus.FAILED_DATABASE:
-            for staged in entries:
-                destination = evidence_root / staged.name
+            destinations = [evidence_root / staged.relative_to(staging_directory) for staged in staged_files]
+            for destination in destinations:
                 if destination.exists():
                     raise FileExistsError(f"Refusing to overwrite restored evidence {destination.name}")
+            for staged, destination in zip(staged_files, destinations, strict=True):
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 staged.replace(destination)
             terminal_status = FamilyDeletionStatus.FAILED_DATABASE
             completed_at = None
         else:
-            for staged in entries:
+            for staged in staged_files:
                 staged.unlink()
             terminal_status = FamilyDeletionStatus.COMPLETED
             completed_at = _now_iso()
 
         if staging_directory.is_dir():
-            staging_directory.rmdir()
+            self._remove_empty_staging_directories(staging_directory)
         if staging_root.is_dir():
             try:
                 staging_root.rmdir()

@@ -63,6 +63,11 @@ Para `FAILED_STORAGE_CLEANUP`, a retomada destrói apenas os arquivos staged val
 `COMPLETED`. Para `FAILED_DATABASE`, ela restaura os arquivos ao evidence root e mantém o receipt
 falho para que uma nova exclusão seja iniciada conscientemente.
 
+O staging preserva o caminho relativo de cada arquivo abaixo do evidence root. A retomada valida
+toda a árvore, recusa links/entradas especiais e colisões antes de mover qualquer arquivo. Receipts
+`DATABASE_DELETED` ou `FAILED_STORAGE_CLEANUP` também funcionam como tombstone durante reinício,
+impedindo que o seed local recrie a família antes do cleanup terminar.
+
 ## Prova automatizada
 
 `tests/test_family_deletion.py` cria dados em todas as tabelas relevantes, persiste evidência,
