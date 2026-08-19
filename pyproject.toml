@@ -9,6 +9,7 @@ dependencies = [
   "pydantic>=2.10,<3",
   "pillow>=11,<13",
   "psutil>=7,<8",
+  "cryptography>=46,<51",
 ]
 
 [project.optional-dependencies]
