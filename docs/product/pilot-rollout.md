@@ -30,3 +30,27 @@ Safety e Engineering precisam estar todos aprovados. Mudança em qualquer versã
 Nessa fase, uma decisão `BLOCK` aprovada produz no máximo `ALERT`. Categoria sem aprovação, coorte
 fora do escopo, versão divergente ou aprovação incompleta produz no máximo `LOG`. O baseline
 versionado mantém `alert_approvals=[]`; preencher a lista demanda evidência externa real e revisão.
+
+## Revisão controlada de eventos (R5-09)
+
+O reviewer recebe um grant just-in-time associado a um ticket, com identidade pseudonimizada,
+categorias e coortes explícitas e validade máxima de uma hora. O grant padrão permite apenas a
+projeção mínima do evento: horário, categoria, confiança, ações proposta/efetiva e digest do
+contexto. Não inclui texto observado, título de janela, identificador familiar ou conteúdo binário.
+
+O acesso a uma referência de evidência exige solicitação explícita e `evidence_access=true`; ainda
+assim, o contrato retorna somente o identificador do objeto, deixando autenticação e entrega para
+o storage privado. Todo acesso autorizado gera uma entrada append-only com grant, ticket, campos
+consultados e indicação de evidência divulgada. Acesso expirado ou fora de escopo falha fechado.
+
+Processo operacional:
+
+1. abrir ticket com finalidade e evento;
+2. emitir grant mínimo e temporário por pessoa;
+3. revisar primeiro apenas metadados;
+4. elevar para evidência somente quando indispensável e documentado;
+5. registrar o acesso no audit store e revogar/expirar o grant;
+6. escalar suspeita de privacidade conforme o playbook de resposta.
+
+Esse contrato não substitui a autenticação e o isolamento multi-tenant requeridos antes de operar
+com famílias reais; ele define e testa a fronteira mínima que a futura API autenticada deve aplicar.
