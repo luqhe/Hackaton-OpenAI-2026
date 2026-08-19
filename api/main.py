@@ -262,10 +262,14 @@ def create_app(
     def ui() -> FileResponse:
         return FileResponse(WEB_ROOT / "index.html", headers={"Cache-Control": "no-cache"})
 
+    def demo_chat() -> FileResponse:
+        return FileResponse(WEB_ROOT / "demo-chat.html", headers={"Cache-Control": "no-cache"})
+
     app.add_api_route("/", ui, methods=["GET"], include_in_schema=False)
     app.add_api_route("/child", ui, methods=["GET"], include_in_schema=False)
     app.add_api_route("/settings", ui, methods=["GET"], include_in_schema=False)
     app.add_api_route("/incidents/{incident_id}", ui, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/demo-chat", demo_chat, methods=["GET"], include_in_schema=False)
 
     return app
 
