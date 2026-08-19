@@ -61,7 +61,9 @@ class GuardianController(
         val nextReport = api.dailyReport()
         val nextCapabilities = api.capabilities()
         val fetchedDevice = runCatching { api.device(deviceId) }.getOrNull()
-        val nextDevice = if (fetchedDevice?.platform.equals("Android", ignoreCase = true)) {
+        val nextDevice = if (
+            fetchedDevice != null && fetchedDevice.platform.equals("Android", ignoreCase = true)
+        ) {
             runCatching { api.heartbeat(deviceId) }.getOrDefault(fetchedDevice)
         } else {
             fetchedDevice
