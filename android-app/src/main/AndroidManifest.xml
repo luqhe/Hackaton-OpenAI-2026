@@ -6,7 +6,7 @@
         android:allowBackup="false"
         android:label="Guardian"
         android:supportsRtl="true"
-        android:usesCleartextTraffic="true"
+        android:usesCleartextTraffic="${guardianCleartext}"
         android:theme="@android:style/Theme.Material.Light.NoActionBar">
         <activity
             android:name=".MainActivity"
