@@ -22,6 +22,10 @@ O modo padrão **não controla o sistema operacional**. Ele simula o estado de b
 - Fila persistente de comandos e confirmação pelo agente.
 - Dashboard responsivo do responsável, tela da criança e editor de políticas.
 - Agente em modo de demo e adaptadores macOS mínimos.
+- Helper Swift com ScreenCaptureKit, metadados de janela, OCR local com Vision e diagnóstico de permissões.
+- Loop macOS adaptativo com hash perceptual, contexto efêmero, outbox offline e heartbeat de saúde.
+- Estado de bloqueio/comandos recuperável após reinício e logs estruturados com redaction.
+- Empacotamento de desenvolvimento, LaunchAgent e diagnóstico de CPU, memória, bateria, disco e rede.
 - Testes automatizados do fluxo completo.
 - Release gates executáveis que limitam bloqueio automático por ambiente.
 - Configuração tipada para desenvolvimento, teste, staging e produção.
@@ -82,6 +86,19 @@ bash scripts/bootstrap.sh
 ```
 
 Os scripts criam `.venv` e instalam as dependências declaradas em `requirements.txt`.
+
+### Bundle de desenvolvimento macOS
+
+Em um Mac de desenvolvimento:
+
+```bash
+bash scripts/package-macos.sh
+bash scripts/install-macos-dev.sh
+```
+
+O primeiro comando cria `.dist/guardian-dev`; o segundo instala um LaunchAgent no perfil do usuário.
+Consulte [docs/product/macos-permissions.md](docs/product/macos-permissions.md) antes de ativar a
+observação. O helper nunca solicita câmera ou microfone.
 
 ## Demo completa
 
@@ -171,6 +188,24 @@ Use somente com um aplicativo descartável criado para a apresentação. O modo 
 
 O observer real está em `agent/observer.py`. A fixture é o caminho oficial da demo porque elimina dependência de conteúdo externo e de permissões concedidas no último minuto.
 
+### Observação contínua e diagnóstico
+
+Com a API local ativa, permissões concedidas e `OPENAI_API_KEY` configurada:
+
+```bash
+.venv/bin/python -m agent.main observe
+```
+
+Telas visualmente estáticas são descartadas; o intervalo cresce durante inatividade. Falhas de
+permissão pausam novas capturas e indisponibilidade da API enfileira incidentes e telemetria
+localmente. Captura real nunca preserva `BLOCK` fora dos release gates aprovados.
+
+Para coletar snapshots técnicos sem conteúdo observado:
+
+```bash
+.venv/bin/python -m agent.main diagnostics --samples 12 --interval 10
+```
+
 ## Testes
 
 ```bash
@@ -222,6 +257,7 @@ Os testes cobrem classificação contextual segura e perigosa, release gates, co
 | `POST /api/incidents/:id/keep-blocked` | Responsável mantém o bloqueio |
 | `GET /api/devices/:id/commands` | Agente consulta comandos pendentes |
 | `POST /api/devices/:id/commands/:commandId/ack` | Agente confirma execução |
+| `POST /api/devices/:id/heartbeat` | Versão, permissões, fila e saúde real do agente |
 | `GET /api/daily-report` | Agregação determinística do dia |
 | `GET/PUT /api/children/:id/policy` | Consulta e altera políticas |
 | `POST /api/devices/pair` | Pareia um dispositivo ao perfil demo |
@@ -261,8 +297,8 @@ Este MVP não representa conformidade pronta para produção. Uso real com menor
 
 ## Limites conhecidos
 
-- O risk engine atual é determinístico e feito para fixtures; o provider multimodal remoto ainda não está incluído.
-- O observer macOS expõe primitivas reais, mas OCR e captura contínua não fazem parte do fluxo oficial.
+- O risk engine de fixtures continua determinístico; captura controlada e o loop macOS usam o provider multimodal remoto.
+- O helper Swift oferece ScreenCaptureKit e OCR Vision, mas a ponte versionada helper → agente (`R1-04`) permanece deliberadamente pendente.
 - A sincronização usa polling local, suficiente para a demo.
 - Não há autenticação, notificações push, múltiplas famílias ou deploy público.
 - O hash atual é criptográfico; um perceptual hash deve substituí-lo antes de observação contínua.

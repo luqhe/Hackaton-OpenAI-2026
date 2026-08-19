@@ -463,16 +463,16 @@ As previsões assumem execução paralela das Etapas 1/2 e 3/4. Uma equipe menor
 - [x] `R0-08` Criar mapa de dados.
 - [x] `R0-13` Configurar CI com os testes existentes.
 - [x] `R0-18` Corrigir alegações de recursos não implementados na interface.
-- [ ] `R1-01` Criar spike de ScreenCaptureKit em Swift.
-- [ ] `R1-02` Validar captura de app e janela ativos.
-- [ ] `R1-03` Validar OCR com Vision em fixture visual local.
+- [x] `R1-01` Criar spike de ScreenCaptureKit em Swift.
+- [x] `R1-02` Validar captura de app e janela ativos.
+- [x] `R1-03` Validar OCR com Vision em fixture visual local.
 - [ ] `R1-04` Prototipar contrato helper Swift → Python.
 
 ### P1
 
-- [ ] `R1-08` Comparar alternativas de change detection.
-- [ ] `R1-11` Integrar observações reais ao context buffer.
-- [ ] `R1-26` Criar primeiro teste E2E executável somente no macOS.
+- [x] `R1-08` Comparar alternativas de change detection.
+- [x] `R1-11` Integrar observações reais ao context buffer.
+- [x] `R1-26` Criar primeiro teste E2E executável somente no macOS.
 - [ ] `R2-01` Propor modelo de tenancy e identidade.
 
 ### Resultado esperado
