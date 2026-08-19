@@ -6,10 +6,12 @@ import json
 import os
 import time
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
 
 from agent.client import GuardianAPIClient, GuardianAPIError
 from agent.context import ObservationContextBuffer
+from agent.credentials import MacOSKeychainCredentialVault
 from agent.diagnostics import PerformanceMonitor
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
 from agent.evidence import EphemeralCapture, build_minimal_png
@@ -19,9 +21,12 @@ from agent.scheduler import AdaptiveObservationSchedule, SuspensionDetector
 from agent.state import AgentStateStore
 from agent.structured_log import StructuredAgentLogger
 from guardian_core.config import Environment, GuardianSettings
+from guardian_core.device_api import AgentIncidentCreate, AgentTelemetryUpdate
+from guardian_core.device_protocol import DEVICE_PROTOCOL_VERSION
 from guardian_core.gates import apply_runtime_release_gate
 from guardian_core.models import (
     DeviceHeartbeat,
+    EnforcementAction,
     IncidentCreate,
     Observation,
     PolicyDecision,
@@ -41,7 +46,7 @@ from risk_engine.openai import (
     OpenAIRiskError,
     assess_screenshot,
 )
-from risk_engine.pipeline import AnalysisSource, ContextualRiskPipeline
+from risk_engine.pipeline import AnalysisSource, ContextualRiskPipeline, PipelineResult
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOGGER = StructuredAgentLogger()
@@ -72,13 +77,52 @@ def reject_invalid_pipeline_output(errors: tuple[str, ...]) -> None:
         )
 
 
+def apply_authenticated_pipeline_policy(
+    pipeline_result: PipelineResult,
+    *,
+    client: GuardianAPIClient,
+    settings: GuardianSettings,
+    fixture_input: bool,
+) -> tuple[RiskAssessment, PolicyDecision]:
+    assessment = RiskAssessment.model_validate(pipeline_result.assessment)
+    rules = [PolicyRule.model_validate(item) for item in client.get_device_policy()]
+    decision = apply_policy(assessment, rules)
+    if decision.action == EnforcementAction.BLOCK and not pipeline_result.eligible_for_automatic_block:
+        decision = decision.model_copy(
+            update={
+                "action": EnforcementAction.ALERT,
+                "reason": f"{decision.reason}; downgraded to ALERT because the pipeline is not block-eligible",
+            }
+        )
+    return assessment, apply_runtime_release_gate(
+        decision,
+        settings,
+        fixture_input=fixture_input,
+    )
+
+
 def flush_offline_outbox(outbox: PersistentOutbox, client: GuardianAPIClient) -> int:
     def deliver(item: OutboxItem) -> bool:
+        if (
+            client.credential is None
+            or item.device_id != client.credential.device_id
+            or item.credential_id != client.credential.credential_id
+        ):
+            AGENT_LOGGER.event(
+                "offline_queue_identity_mismatch",
+                level="WARNING",
+                item_id=item.id,
+            )
+            return False
+        payload = dict(item.payload)
+        payload.pop("child_id", None)
+        payload.pop("device_id", None)
         try:
             if item.kind == "TELEMETRY":
-                client.record_telemetry(item.device_id, item.payload)
+                payload.setdefault("observed_at", item.created_at)
+                client.record_device_telemetry(payload)
             else:
-                client.create_incident(item.payload)
+                client.create_device_incident(payload)
         except GuardianAPIError:
             return False
         return True
@@ -93,9 +137,14 @@ def record_telemetry_or_queue(
     payload: dict[str, object],
 ) -> None:
     try:
-        client.record_telemetry(device_id, payload)
+        client.record_device_telemetry(payload)
     except GuardianAPIError:
-        item = outbox.enqueue("TELEMETRY", device_id, payload)
+        item = outbox.enqueue(
+            "TELEMETRY",
+            device_id,
+            payload,
+            credential_id=client.credential.credential_id if client.credential else None,
+        )
         AGENT_LOGGER.event("offline_queue_added", kind="TELEMETRY", item_id=item.id)
         print(f"offline_queue=TELEMETRY id={item.id}")
 
@@ -107,9 +156,14 @@ def create_incident_or_queue(
     payload: dict[str, object],
 ) -> dict[str, object] | None:
     try:
-        return client.create_incident(payload)
+        return client.create_device_incident(payload)
     except GuardianAPIError:
-        item = outbox.enqueue("INCIDENT", device_id, payload)
+        item = outbox.enqueue(
+            "INCIDENT",
+            device_id,
+            payload,
+            credential_id=client.credential.credential_id if client.credential else None,
+        )
         AGENT_LOGGER.event("offline_queue_added", kind="INCIDENT", item_id=item.id)
         print(f"offline_queue=INCIDENT id={item.id}")
         return None
@@ -138,6 +192,15 @@ class LiveScreenshotProvider:
             context.observation,
             timeout=timeout,
         )
+
+
+def build_authenticated_client(api_url: str) -> GuardianAPIClient:
+    credential = MacOSKeychainCredentialVault().load()
+    return GuardianAPIClient(
+        api_url,
+        credential=credential,
+        allow_insecure_localhost=True,
+    )
 
 
 def load_fixture(path: Path) -> tuple[Observation, str]:
@@ -226,7 +289,7 @@ def run_fixture(args: argparse.Namespace) -> int:
 
     if args.wait_for_unlock:
         print("Waiting for a parent decision. Press Ctrl+C to stop.")
-        poll_commands(
+        poll_demo_commands(
             client,
             args.device_id,
             enforcer,
@@ -245,7 +308,7 @@ def run_live_demo(args: argparse.Namespace) -> int:
     if args.countdown < 0:
         raise ValueError("--countdown cannot be negative")
 
-    client = GuardianAPIClient(args.api_url)
+    client = build_authenticated_client(args.api_url)
     observer = MacOSObserver()
     temporary_capture = EphemeralCapture.create()
     screenshot_path = temporary_capture.path
@@ -264,10 +327,9 @@ def run_live_demo(args: argparse.Namespace) -> int:
             timeout_seconds=args.openai_timeout,
         ).assess(context)
         reject_invalid_pipeline_output(pipeline_result.errors)
-        assessment, decision = apply_validated_policy(
-            pipeline_result.assessment,
+        assessment, decision = apply_authenticated_pipeline_policy(
+            pipeline_result,
             client=client,
-            child_id=args.child_id,
             settings=settings,
             fixture_input=args.controlled_demo,
         )
@@ -280,10 +342,9 @@ def run_live_demo(args: argparse.Namespace) -> int:
             print(f"analysis_fallback={','.join(pipeline_result.errors)} automatic_block=false")
         print(f"decision={decision.action} reason={decision.reason}")
 
-        client.record_telemetry(
-            args.device_id,
-            TelemetryUpdate(
-                child_id=args.child_id,
+        client.record_device_telemetry(
+            AgentTelemetryUpdate(
+                observed_at=observation.timestamp,
                 screen_changes=1,
                 suspicious_events=1 if assessment.risk != "SAFE" else 0,
                 app_name=observation.app_name,
@@ -294,19 +355,15 @@ def run_live_demo(args: argparse.Namespace) -> int:
             return 0
 
         enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
-        incident_payload = IncidentCreate(
-            child_id=args.child_id,
-            device_id=args.device_id,
+        incident_payload = AgentIncidentCreate(
             application=observation.app_name,
             occurred_at=observation.timestamp,
             assessment=assessment,
             decision=decision,
-            deduplication_key=hashlib.sha256(
-                f"{args.device_id}|{observation.app_name}|{screen_hash}".encode()
-            ).hexdigest(),
+            deduplication_key=hashlib.sha256(f"{observation.app_name}|{screen_hash}".encode()).hexdigest(),
         )
-        incident = client.create_incident(incident_payload.model_dump(mode="json"))
-        client.upload_png_evidence(incident["id"], build_minimal_png(screenshot_path))
+        incident = client.create_device_incident(incident_payload.model_dump(mode="json"))
+        client.upload_device_png_evidence(incident["id"], build_minimal_png(screenshot_path))
         if decision.action == "BLOCK":
             enforcer.block(observation.app_name)
         temporary_capture.delete()
@@ -318,7 +375,6 @@ def run_live_demo(args: argparse.Namespace) -> int:
             print("Waiting for a parent decision. Press Ctrl+C to stop.")
             poll_commands(
                 client,
-                args.device_id,
                 enforcer,
                 args.poll_interval,
                 state_store=runtime_state_store_for(args),
@@ -331,7 +387,7 @@ def run_live_demo(args: argparse.Namespace) -> int:
 def run_observer(args: argparse.Namespace) -> int:
     """Run the adaptive real-screen observation loop on macOS."""
     settings = GuardianSettings.from_env()
-    client = GuardianAPIClient(args.api_url)
+    client = build_authenticated_client(args.api_url)
     state_store = AgentStateStore(args.runtime_state_path)
     outbox = PersistentOutbox(args.outbox_path)
     runtime_state = state_store.load()
@@ -371,8 +427,7 @@ def run_observer(args: argparse.Namespace) -> int:
                 )
                 state_store.save(runtime_state)
                 application = observer.get_active_application()
-                client.record_heartbeat(
-                    args.device_id,
+                client.record_device_heartbeat(
                     DeviceHeartbeat(
                         agent_version=APP_VERSION,
                         screen_recording_permission=True,
@@ -392,15 +447,14 @@ def run_observer(args: argparse.Namespace) -> int:
                     timeout_seconds=args.openai_timeout,
                 ).assess(risk_context)
                 reject_invalid_pipeline_output(pipeline_result.errors)
-                assessment, decision = apply_validated_policy(
-                    pipeline_result.assessment,
+                assessment, decision = apply_authenticated_pipeline_policy(
+                    pipeline_result,
                     client=client,
-                    child_id=args.child_id,
                     settings=settings,
                     fixture_input=False,
                 )
-                telemetry = TelemetryUpdate(
-                    child_id=args.child_id,
+                telemetry = AgentTelemetryUpdate(
+                    observed_at=observation.timestamp,
                     screen_changes=1,
                     suspicious_events=1 if assessment.risk != "SAFE" else 0,
                     app_name=application,
@@ -408,7 +462,7 @@ def run_observer(args: argparse.Namespace) -> int:
                 record_telemetry_or_queue(
                     client,
                     outbox,
-                    args.device_id,
+                    client.credential.device_id,
                     telemetry,
                 )
                 source = (
@@ -430,25 +484,23 @@ def run_observer(args: argparse.Namespace) -> int:
                     application=application,
                 )
                 if decision.action != "IGNORE":
-                    incident_payload = IncidentCreate(
-                        child_id=args.child_id,
-                        device_id=args.device_id,
+                    incident_payload = AgentIncidentCreate(
                         application=application,
                         occurred_at=observation.timestamp,
                         assessment=assessment,
                         decision=decision,
-                        deduplication_key=hashlib.sha256(
-                            f"{args.device_id}|{application}|{screen_hash}".encode()
-                        ).hexdigest(),
+                        deduplication_key=hashlib.sha256(f"{application}|{screen_hash}".encode()).hexdigest(),
                     ).model_dump(mode="json")
                     incident = create_incident_or_queue(
                         client,
                         outbox,
-                        args.device_id,
+                        client.credential.device_id,
                         incident_payload,
                     )
                     if incident is not None:
-                        client.upload_png_evidence(str(incident["id"]), build_minimal_png(screenshot_path))
+                        client.upload_device_png_evidence(
+                            str(incident["id"]), build_minimal_png(screenshot_path)
+                        )
                     if decision.action == "BLOCK":
                         enforcer.block(application)
                     if incident is not None:
@@ -476,7 +528,7 @@ def run_diagnostics(args: argparse.Namespace) -> int:
     return 0
 
 
-def poll_commands(
+def poll_demo_commands(
     client: GuardianAPIClient,
     device_id: str,
     enforcer: DemoEnforcer,
@@ -494,6 +546,68 @@ def poll_commands(
                 enforcer.unblock(command["application"])
                 print(f"unlocked={command['application']} command={command['id']}")
             client.acknowledge_command(device_id, command["id"])
+            last_command_id = max(last_command_id, command["id"])
+            if state_store is not None and runtime_state is not None:
+                runtime_state = runtime_state.update(last_command_id=last_command_id)
+                state_store.save(runtime_state)
+        if once:
+            return
+        time.sleep(poll_interval)
+
+
+def poll_commands(
+    client: GuardianAPIClient,
+    enforcer: DemoEnforcer,
+    poll_interval: float,
+    once: bool = False,
+    state_store: AgentStateStore | None = None,
+) -> None:
+    runtime_state = state_store.load() if state_store is not None else None
+    command_scope = client.command_scope
+    if runtime_state is not None and runtime_state.command_scope == command_scope:
+        last_command_id = runtime_state.last_command_id
+    else:
+        last_command_id = 0
+        if runtime_state is not None and state_store is not None:
+            runtime_state = runtime_state.update(
+                last_command_id=0,
+                command_scope=command_scope,
+            )
+            state_store.save(runtime_state)
+    while True:
+        enforcer.enforce()
+        commands = client.pending_device_commands(
+            after_id=last_command_id,
+            wait_seconds=0 if once else 20,
+        )
+        for command in commands:
+            error_code = None
+            try:
+                expires_at = datetime.fromisoformat(command["expires_at"])
+                if command.get("protocol_version") != DEVICE_PROTOCOL_VERSION:
+                    error_code = "UNSUPPORTED_PROTOCOL"
+                elif command.get("type") != "UNLOCK_APPLICATION":
+                    error_code = "UNSUPPORTED_COMMAND"
+                elif expires_at <= datetime.now(UTC):
+                    error_code = "COMMAND_EXPIRED"
+            except (KeyError, TypeError, ValueError):
+                error_code = "MALFORMED_COMMAND"
+
+            if error_code is None:
+                try:
+                    enforcer.unblock(command["application"])
+                except (KeyError, OSError, ValueError):
+                    error_code = "ENFORCEMENT_FAILED"
+
+            if error_code is None:
+                client.acknowledge_device_command(command["id"], result="EXECUTED")
+                print(f"unlocked={command['application']} command={command['id']}")
+            else:
+                client.acknowledge_device_command(
+                    command["id"],
+                    result="FAILED",
+                    error_code=error_code,
+                )
             last_command_id = max(last_command_id, command["id"])
             if state_store is not None and runtime_state is not None:
                 runtime_state = runtime_state.update(last_command_id=last_command_id)
@@ -540,8 +654,6 @@ def build_parser() -> argparse.ArgumentParser:
         "--api-url",
         default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"),
     )
-    live_demo.add_argument("--child-id", default="child-demo")
-    live_demo.add_argument("--device-id", default="device-demo")
     live_demo.add_argument("--state-path", type=Path, default=PROJECT_ROOT / ".data" / "agent-state.json")
     live_demo.add_argument("--countdown", type=int, default=3)
     live_demo.add_argument("--openai-timeout", type=float, default=20)
@@ -555,8 +667,6 @@ def build_parser() -> argparse.ArgumentParser:
         help="Continuously observe meaningful macOS screen changes",
     )
     observe.add_argument("--api-url", default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"))
-    observe.add_argument("--child-id", default="child-demo")
-    observe.add_argument("--device-id", default="device-demo")
     observe.add_argument("--session-id", default="interactive")
     observe.add_argument("--state-path", type=Path, default=PROJECT_ROOT / ".data" / "agent-state.json")
     observe.add_argument(
@@ -598,7 +708,6 @@ def build_parser() -> argparse.ArgumentParser:
 
     poll = subparsers.add_parser("poll", help="Poll and execute pending device commands")
     poll.add_argument("--api-url", default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"))
-    poll.add_argument("--device-id", default="device-demo")
     poll.add_argument("--state-path", type=Path, default=PROJECT_ROOT / ".data" / "agent-state.json")
     poll.add_argument(
         "--runtime-state-path",
@@ -611,11 +720,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     def handle_poll(args: argparse.Namespace) -> int:
         settings = GuardianSettings.from_env()
-        client = GuardianAPIClient(args.api_url)
+        client = build_authenticated_client(args.api_url)
         enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
         poll_commands(
             client,
-            args.device_id,
             enforcer,
             args.poll_interval,
             args.once,

@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import UTC, datetime
 from io import BytesIO
 from pathlib import Path
@@ -32,6 +33,7 @@ def development_settings(tmp_path: Path, environment: Environment = Environment.
         automatic_blocking_enabled=True,
         real_enforcement_enabled=False,
         release_gate_approved=False,
+        demo_mode=True,
     )
 
 
@@ -75,11 +77,15 @@ class FakeObserver:
 class FakeClient:
     def __init__(self, events):
         self.events = events
+        self.credential = SimpleNamespace(
+            device_id="credential-device",
+            credential_id="credential-current",
+        )
         self.incidents = []
         self.uploads = []
         self.telemetry = []
 
-    def get_policy(self, child_id):
+    def get_device_policy(self):
         self.events.append("policy")
         return [
             {
@@ -90,20 +96,20 @@ class FakeClient:
             }
         ]
 
-    def record_telemetry(self, device_id, payload):
+    def record_device_telemetry(self, payload):
         self.events.append("telemetry")
-        self.telemetry.append((device_id, payload))
+        self.telemetry.append(payload)
 
-    def record_heartbeat(self, device_id, payload):
+    def record_device_heartbeat(self, payload):
         self.events.append("heartbeat")
-        return {"id": device_id, "protection_status": "PROTECTED"}
+        return {"id": "credential-device", "protection_status": "PROTECTED"}
 
-    def create_incident(self, payload):
+    def create_device_incident(self, payload):
         self.events.append("incident")
         self.incidents.append(payload)
         return {"id": "incident-live", "status": "BLOCKED"}
 
-    def upload_png_evidence(self, incident_id, content):
+    def upload_device_png_evidence(self, incident_id, content):
         self.events.append("upload")
         self.uploads.append((incident_id, content))
         return {"id": "evidence-live", "url": "/api/evidence/evidence-live"}
@@ -149,7 +155,7 @@ def configure_live_fakes(monkeypatch, tmp_path, assessment):
     settings = development_settings(tmp_path)
     monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
     monkeypatch.setattr(agent_main, "MacOSObserver", lambda: observer)
-    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: client)
+    monkeypatch.setattr(agent_main, "build_authenticated_client", lambda api_url: client)
     monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: enforcer)
     monkeypatch.setattr(agent_main, "assess_screenshot", lambda *args, **kwargs: assessment)
     return events, observer, client, enforcer
@@ -193,6 +199,8 @@ def test_live_demo_captures_assesses_uploads_then_blocks(monkeypatch, tmp_path, 
         assert uploaded_image.size == (8, 8)
     assert client.incidents[0]["assessment"]["risk"] == "HIGH"
     assert "action" not in client.incidents[0]["assessment"]
+    assert "child_id" not in client.incidents[0]
+    assert "device_id" not in client.incidents[0]
     assert observer.screenshot_path is not None
     assert not observer.screenshot_path.exists()
 
@@ -209,6 +217,25 @@ def test_safe_live_assessment_creates_no_incident(monkeypatch, tmp_path, capsys)
     assert client.uploads == []
     assert enforcer.blocked == []
     assert not observer.screenshot_path.exists()
+
+
+def test_pipeline_fallback_cannot_block_even_when_release_gate_is_approved(tmp_path) -> None:
+    client = FakeClient([])
+    settings = replace(development_settings(tmp_path), release_gate_approved=True)
+    pipeline_result = SimpleNamespace(
+        assessment=high_assessment(),
+        eligible_for_automatic_block=False,
+    )
+
+    _, decision = agent_main.apply_authenticated_pipeline_policy(
+        pipeline_result,
+        client=client,
+        settings=settings,
+        fixture_input=False,
+    )
+
+    assert decision.action == "ALERT"
+    assert "pipeline" in decision.reason
 
 
 def test_remote_failure_uses_nonblocking_fallback_without_incident(monkeypatch, tmp_path, capsys) -> None:
@@ -281,7 +308,7 @@ def test_wait_for_unlock_reuses_existing_polling(monkeypatch, tmp_path) -> None:
 
     assert agent_main.run_live_demo(live_args(tmp_path, wait_for_unlock=True)) == 0
 
-    assert polling[0][0] == (client, "device-demo", enforcer, 0)
+    assert polling[0][0] == (client, enforcer, 0)
     assert isinstance(polling[0][1]["state_store"], AgentStateStore)
 
 
@@ -313,8 +340,8 @@ def test_png_client_uses_image_content_type(monkeypatch) -> None:
 
 
 def test_png_evidence_is_accessible_from_existing_route(tmp_path) -> None:
-    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
-    with TestClient(app) as client:
+    app = create_app(settings=development_settings(tmp_path))
+    with TestClient(app, headers={"X-Guardian-Demo": "true"}) as client:
         incident = client.post("/api/incidents", json=incident_payload()).json()
         uploaded = client.post(
             f"/api/incidents/{incident['id']}/evidence",
@@ -355,7 +382,7 @@ def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp
 
     monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
     monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: LoopObserver())
-    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: client)
+    monkeypatch.setattr(agent_main, "build_authenticated_client", lambda api_url: client)
     monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: enforcer)
     monkeypatch.setattr(
         agent_main,
@@ -371,6 +398,8 @@ def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp
 
     assert events[:4] == ["capture", "active-app", "heartbeat", "assessment"]
     assert client.incidents[0]["decision"]["action"] == "ALERT"
+    assert "child_id" not in client.incidents[0]
+    assert "device_id" not in client.incidents[0]
     assert client.uploads[0][0] == "incident-live"
     assert enforcer.blocked == []
 
@@ -384,7 +413,7 @@ def test_observe_command_skips_analysis_for_static_screen(monkeypatch, tmp_path)
 
     monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
     monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: StaticObserver())
-    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: FakeClient([]))
+    monkeypatch.setattr(agent_main, "build_authenticated_client", lambda api_url: FakeClient([]))
     monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: FakeEnforcer([]))
     monkeypatch.setattr(
         agent_main,
@@ -403,10 +432,10 @@ def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monke
     settings = development_settings(tmp_path)
 
     class OfflineClient(FakeClient):
-        def record_telemetry(self, device_id, payload):
+        def record_device_telemetry(self, payload):
             raise GuardianAPIError("offline")
 
-        def create_incident(self, payload):
+        def create_device_incident(self, payload):
             raise GuardianAPIError("offline")
 
     class LoopObserver:
@@ -419,7 +448,7 @@ def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monke
 
     monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
     monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: LoopObserver())
-    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: OfflineClient(events))
+    monkeypatch.setattr(agent_main, "build_authenticated_client", lambda api_url: OfflineClient(events))
     monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: FakeEnforcer(events))
     monkeypatch.setattr(agent_main, "assess_screenshot", lambda *args, **kwargs: high_assessment())
     args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])

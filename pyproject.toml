@@ -9,6 +9,7 @@ dependencies = [
   "pydantic>=2.10,<3",
   "pillow>=11,<13",
   "psutil>=7,<8",
+  "cryptography>=46,<51",
 ]
 
 [project.optional-dependencies]
@@ -16,6 +17,10 @@ dev = [
   "httpx2>=2.12,<3",
   "pytest>=8.3,<9",
   "ruff>=0.12,<1",
+]
+managed = [
+  "boto3>=1.40,<2",
+  "psycopg[binary,pool]>=3.2,<4",
 ]
 
 [tool.setuptools.packages.find]
