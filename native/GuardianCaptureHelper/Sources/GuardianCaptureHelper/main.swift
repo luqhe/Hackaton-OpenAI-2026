@@ -1,4 +1,5 @@
 import AppKit
+import CoreGraphics
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
@@ -52,26 +53,81 @@ struct ScreenCaptureService {
     }
 }
 
+struct ActiveWindow: Encodable {
+    let application: String
+    let bundleIdentifier: String?
+    let processIdentifier: Int32
+    let windowTitle: String
+}
+
+struct ActiveWindowService {
+    func current() throws -> ActiveWindow {
+        guard let application = NSWorkspace.shared.frontmostApplication else {
+            throw ValidationError("No frontmost application is available.")
+        }
+
+        let processIdentifier = application.processIdentifier
+        let windows = CGWindowListCopyWindowInfo(
+            [.optionOnScreenOnly, .excludeDesktopElements],
+            kCGNullWindowID
+        ) as? [[String: Any]] ?? []
+        let windowTitle = windows.first { window in
+            let ownerPID = window[kCGWindowOwnerPID as String] as? Int32
+            let layer = window[kCGWindowLayer as String] as? Int ?? -1
+            return ownerPID == processIdentifier && layer == 0
+        }?[kCGWindowName as String] as? String ?? ""
+
+        return ActiveWindow(
+            application: application.localizedName ?? application.bundleIdentifier ?? "Unknown application",
+            bundleIdentifier: application.bundleIdentifier,
+            processIdentifier: processIdentifier,
+            windowTitle: windowTitle
+        )
+    }
+}
+
 @main
 struct GuardianCaptureHelper {
     static func main() async {
         do {
             let arguments = CommandLine.arguments
-            guard arguments.count == 3, arguments[1] == "capture" else {
-                throw ValidationError(
-                    "Usage: guardian-capture-helper capture /absolute/path/frame.png"
-                )
+            guard arguments.count >= 2 else {
+                throw ValidationError(usage)
             }
-            let destination = URL(fileURLWithPath: arguments[2]).standardizedFileURL
-            guard destination.pathExtension.lowercased() == "png" else {
-                throw ValidationError("Capture destination must use the .png extension.")
+
+            switch arguments[1] {
+            case "capture":
+                guard arguments.count == 3 else {
+                    throw ValidationError(usage)
+                }
+                let destination = URL(fileURLWithPath: arguments[2]).standardizedFileURL
+                guard destination.pathExtension.lowercased() == "png" else {
+                    throw ValidationError("Capture destination must use the .png extension.")
+                }
+                try await ScreenCaptureService().capturePrimaryDisplay(to: destination)
+            case "active-window":
+                guard arguments.count == 2 else {
+                    throw ValidationError(usage)
+                }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let payload = try encoder.encode(ActiveWindowService().current())
+                FileHandle.standardOutput.write(payload)
+                FileHandle.standardOutput.write(Data("\n".utf8))
+            default:
+                throw ValidationError(usage)
             }
-            try await ScreenCaptureService().capturePrimaryDisplay(to: destination)
         } catch {
             FileHandle.standardError.write(Data("Guardian capture failed: \(error.localizedDescription)\n".utf8))
             Foundation.exit(EXIT_FAILURE)
         }
     }
+
+    private static let usage = """
+    Usage:
+      guardian-capture-helper capture /absolute/path/frame.png
+      guardian-capture-helper active-window
+    """
 }
 
 struct ValidationError: LocalizedError {

@@ -129,7 +129,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 ## Épico 1.1 — Helper nativo
 
 - [x] `R1-01` Criar helper Swift usando ScreenCaptureKit.
-- [ ] `R1-02` Obter aplicativo e janela ativos por API nativa apropriada.
+- [x] `R1-02` Obter aplicativo e janela ativos por API nativa apropriada.
 - [ ] `R1-03` Integrar OCR local com Vision.
 - [ ] `R1-04` Expor contrato versionado entre helper Swift e agente Python.
 - [ ] `R1-05` Tratar múltiplos monitores, mudança de resolução e suspensão.
