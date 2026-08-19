@@ -67,6 +67,7 @@ class MacOSKeychainCredentialVault:
             {
                 "credential_id": credential.credential_id,
                 "device_id": credential.device_id,
+                "installation_id": credential.installation_id,
                 "public_key": credential.public_key,
                 "private_key": credential.private_key,
             },
@@ -110,6 +111,7 @@ class MacOSKeychainCredentialVault:
             return IssuedDeviceCredential(
                 credential_id=value["credential_id"],
                 device_id=value["device_id"],
+                installation_id=value["installation_id"],
                 public_key=value["public_key"],
                 private_key=value["private_key"],
             )

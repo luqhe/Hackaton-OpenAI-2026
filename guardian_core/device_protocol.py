@@ -36,11 +36,16 @@ class DeviceAuthError(ValueError):
 
 
 @dataclass(frozen=True)
-class IssuedDeviceCredential:
-    credential_id: str
-    device_id: str
+class GeneratedDeviceKeyPair:
     public_key: str
     private_key: str = field(repr=False)
+    installation_id: str
+
+
+@dataclass(frozen=True)
+class IssuedDeviceCredential(GeneratedDeviceKeyPair):
+    credential_id: str
+    device_id: str
 
 
 @dataclass(frozen=True)
@@ -91,12 +96,22 @@ class ReplayProtector(Protocol):
 
 
 def issue_device_credential(device_id: str) -> IssuedDeviceCredential:
-    private_key = Ed25519PrivateKey.generate()
+    key_pair = generate_device_key_pair()
     return IssuedDeviceCredential(
         credential_id=f"cred-{secrets.token_urlsafe(18)}",
         device_id=device_id,
+        public_key=key_pair.public_key,
+        private_key=key_pair.private_key,
+        installation_id=key_pair.installation_id,
+    )
+
+
+def generate_device_key_pair(installation_id: str | None = None) -> GeneratedDeviceKeyPair:
+    private_key = Ed25519PrivateKey.generate()
+    return GeneratedDeviceKeyPair(
         public_key=_encode_base64url(private_key.public_key().public_bytes_raw()),
         private_key=_encode_base64url(private_key.private_bytes_raw()),
+        installation_id=installation_id or f"install-{secrets.token_urlsafe(18)}",
     )
 
 
