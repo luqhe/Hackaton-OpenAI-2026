@@ -6,8 +6,14 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
-from guardian_core.pilot import PilotMode, load_pilot_rollout
-from guardian_core.pilot_control import PilotChangeAction, PilotConfigStore, pilot_config_digest
+from guardian_core.models import EnforcementAction
+from guardian_core.pilot import PilotKillSwitch, PilotMode, load_pilot_rollout
+from guardian_core.pilot_control import (
+    PilotChangeAction,
+    PilotConcurrentUpdateError,
+    PilotConfigStore,
+    pilot_config_digest,
+)
 
 ROOT = Path(__file__).resolve().parents[1]
 BASELINE_PATH = ROOT / "config" / "pilot-rollout.v1.json"
@@ -23,6 +29,7 @@ def test_activation_and_rollback_are_versioned_and_audited(tmp_path: Path) -> No
         actor_subject_digest=ACTOR_DIGEST,
         change_reference="PILOT-100",
         changed_at=NOW,
+        expected_active_digest=None,
     )
     permissive = baseline.model_copy(update={"mode": PilotMode.ALERT_ONLY, "kill_switches": ()})
     promoted = store.activate(
@@ -30,6 +37,7 @@ def test_activation_and_rollback_are_versioned_and_audited(tmp_path: Path) -> No
         actor_subject_digest=ACTOR_DIGEST,
         change_reference="PILOT-101",
         changed_at=NOW,
+        expected_active_digest=initial.active_digest,
     )
 
     rolled_back = store.rollback(
@@ -37,6 +45,7 @@ def test_activation_and_rollback_are_versioned_and_audited(tmp_path: Path) -> No
         actor_subject_digest=ACTOR_DIGEST,
         change_reference="INC-42",
         changed_at=NOW,
+        expected_active_digest=promoted.active_digest,
     )
 
     assert promoted.previous_digest == initial.active_digest
@@ -55,6 +64,7 @@ def test_rollback_rejects_unknown_or_less_safe_snapshot(tmp_path: Path) -> None:
         actor_subject_digest=ACTOR_DIGEST,
         change_reference="PILOT-unsafe-test",
         changed_at=NOW,
+        expected_active_digest=None,
     )
 
     with pytest.raises(ValueError, match="retain a global kill switch"):
@@ -63,6 +73,7 @@ def test_rollback_rejects_unknown_or_less_safe_snapshot(tmp_path: Path) -> None:
             actor_subject_digest=ACTOR_DIGEST,
             change_reference="INC-43",
             changed_at=NOW,
+            expected_active_digest=unsafe_change.active_digest,
         )
     with pytest.raises(ValueError, match="does not exist"):
         store.rollback(
@@ -70,6 +81,7 @@ def test_rollback_rejects_unknown_or_less_safe_snapshot(tmp_path: Path) -> None:
             actor_subject_digest=ACTOR_DIGEST,
             change_reference="INC-44",
             changed_at=NOW,
+            expected_active_digest=unsafe_change.active_digest,
         )
 
 
@@ -81,6 +93,7 @@ def test_tampered_snapshot_fails_digest_validation(tmp_path: Path) -> None:
         actor_subject_digest=ACTOR_DIGEST,
         change_reference="PILOT-102",
         changed_at=NOW,
+        expected_active_digest=None,
     )
     snapshot = store.snapshot_directory / f"{change.active_digest}.json"
     replacement = baseline.model_copy(update={"rollout_id": "tampered"})
@@ -92,6 +105,7 @@ def test_tampered_snapshot_fails_digest_validation(tmp_path: Path) -> None:
             actor_subject_digest=ACTOR_DIGEST,
             change_reference="INC-45",
             changed_at=NOW,
+            expected_active_digest=change.active_digest,
         )
 
     assert pilot_config_digest(replacement) != change.active_digest
@@ -105,6 +119,7 @@ def test_invalid_audit_fields_do_not_mutate_active_state(tmp_path: Path) -> None
         actor_subject_digest=ACTOR_DIGEST,
         change_reference="PILOT-200",
         changed_at=NOW,
+        expected_active_digest=None,
     )
     active_before = store.active_path.read_bytes()
     audit_before = store.audit_path.read_bytes()
@@ -115,6 +130,7 @@ def test_invalid_audit_fields_do_not_mutate_active_state(tmp_path: Path) -> None
             actor_subject_digest="not-a-digest",
             change_reference="PILOT-201",
             changed_at=NOW,
+            expected_active_digest=initial.active_digest,
         )
 
     assert store.active_path.read_bytes() == active_before
@@ -130,6 +146,7 @@ def test_partial_write_failure_restores_snapshot_audit_and_active(monkeypatch, t
         actor_subject_digest=ACTOR_DIGEST,
         change_reference="PILOT-202",
         changed_at=NOW,
+        expected_active_digest=None,
     )
     active_before = store.active_path.read_bytes()
     audit_before = store.audit_path.read_bytes()
@@ -149,6 +166,7 @@ def test_partial_write_failure_restores_snapshot_audit_and_active(monkeypatch, t
             actor_subject_digest=ACTOR_DIGEST,
             change_reference="PILOT-203",
             changed_at=NOW,
+            expected_active_digest=pilot_config_digest(baseline),
         )
 
     assert store.active_path.read_bytes() == active_before
@@ -166,3 +184,53 @@ def test_corrupt_active_config_returns_built_in_fail_safe(tmp_path: Path) -> Non
     assert config.rollout_id == "runtime-fail-safe"
     assert config.mode == PilotMode.TECHNICAL_SHADOW
     assert config.kill_switches[0].ceiling == "LOG"
+
+
+def test_stale_writer_cannot_overwrite_concurrent_kill_switch(tmp_path: Path) -> None:
+    store = PilotConfigStore(tmp_path / "pilot-state")
+    baseline = load_pilot_rollout(BASELINE_PATH)
+    initial = store.activate(
+        baseline,
+        actor_subject_digest=ACTOR_DIGEST,
+        change_reference="PILOT-300",
+        changed_at=NOW,
+        expected_active_digest=None,
+    )
+    switch = PilotKillSwitch(
+        switch_id="incident-stop",
+        ceiling=EnforcementAction.LOG,
+        reason="Concurrent incident response",
+    )
+    stopped = store.set_kill_switch(
+        switch,
+        actor_subject_digest=ACTOR_DIGEST,
+        change_reference="INC-300",
+        changed_at=NOW,
+        expected_active_digest=initial.active_digest,
+    )
+
+    with pytest.raises(PilotConcurrentUpdateError, match="digest changed"):
+        store.activate(
+            baseline.model_copy(update={"rollout_id": "stale-promotion"}),
+            actor_subject_digest=ACTOR_DIGEST,
+            change_reference="PILOT-301",
+            changed_at=NOW,
+            expected_active_digest=initial.active_digest,
+        )
+
+    assert pilot_config_digest(store.current()) == stopped.active_digest
+    assert any(item.switch_id == "incident-stop" for item in store.current().kill_switches)
+
+
+def test_process_lock_rejects_simultaneous_update(tmp_path: Path) -> None:
+    store = PilotConfigStore(tmp_path / "pilot-state")
+    baseline = load_pilot_rollout(BASELINE_PATH)
+
+    with store._exclusive_lock(), pytest.raises(PilotConcurrentUpdateError, match="concurrently"):
+        store.activate(
+            baseline,
+            actor_subject_digest=ACTOR_DIGEST,
+            change_reference="PILOT-302",
+            changed_at=NOW,
+            expected_active_digest=None,
+        )

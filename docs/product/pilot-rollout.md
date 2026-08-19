@@ -104,10 +104,15 @@ Exemplo operacional, sempre com ticket de mudança/incidente:
 ```bash
 python scripts/manage_pilot_rollout.py validate config/pilot-rollout.v1.json
 python scripts/manage_pilot_rollout.py activate config/pilot-rollout.v1.json \
-  --actor-digest "$PILOT_ACTOR_DIGEST" --change-reference PILOT-123
+  --actor-digest "$PILOT_ACTOR_DIGEST" --change-reference PILOT-123 \
+  --expected-active-digest NONE
 python scripts/manage_pilot_rollout.py status
+python scripts/manage_pilot_rollout.py kill-switch --switch-id incident-stop \
+  --ceiling LOG --reason "Pilot paused" --actor-digest "$PILOT_ACTOR_DIGEST" \
+  --change-reference INC-455 --expected-active-digest "$CURRENT_DIGEST"
 python scripts/manage_pilot_rollout.py rollback "$KNOWN_SAFE_DIGEST" \
-  --actor-digest "$PILOT_ACTOR_DIGEST" --change-reference INC-456
+  --actor-digest "$PILOT_ACTOR_DIGEST" --change-reference INC-456 \
+  --expected-active-digest "$CURRENT_DIGEST"
 ```
 
 Procedimento de incidente: acionar primeiro o kill switch global, confirmar telemetria sem novas
@@ -115,3 +120,9 @@ intervenções, selecionar snapshot conhecido e seguro, executar rollback, verif
 preservar o audit log. O exercício automatizado valida ativação, rollback, snapshot ausente,
 tentativa insegura e adulteração de digest; a execução em staging ainda precisa ser registrada por
 Pilot Operations antes de remover o switch global.
+
+Toda mutação usa compare-and-swap: o operador fornece o digest observado em `status` como
+`--expected-active-digest` (`NONE` somente na primeira ativação). O store mantém um lock exclusivo
+durante leitura, validação, auditoria e troca dos arquivos. Se outro operador acionar o kill switch
+ou promover uma configuração antes, o digest diverge e a operação obsoleta falha sem sobrescrever
+a resposta ao incidente.
