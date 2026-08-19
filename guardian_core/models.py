@@ -6,6 +6,32 @@ from typing import Annotated
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
+from guardian_core.identity import (
+    Account,
+    AccountStatus,
+    Child,
+    DeviceLifecycleStatus,
+    Family,
+    FamilyScope,
+    FamilyStatus,
+    Membership,
+    MembershipRole,
+    MembershipStatus,
+)
+
+__all__ = [
+    "Account",
+    "AccountStatus",
+    "Child",
+    "DeviceLifecycleStatus",
+    "Family",
+    "FamilyScope",
+    "FamilyStatus",
+    "Membership",
+    "MembershipRole",
+    "MembershipStatus",
+]
+
 
 def utc_now() -> datetime:
     return datetime.now(UTC)
@@ -135,6 +161,7 @@ class Incident(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
+    family_id: str
     child_id: str
     device_id: str
     application: str
@@ -169,11 +196,13 @@ class DevicePairRequest(BaseModel):
 
 class Device(BaseModel):
     id: str
+    family_id: str
     child_id: str
     name: str
     platform: str
     paired_at: datetime
     last_seen_at: datetime | None = None
+    lifecycle_status: DeviceLifecycleStatus
     protection_status: str
 
 
@@ -217,6 +246,7 @@ class DailyAppUsage(BaseModel):
 
 
 class DailyReport(BaseModel):
+    family_id: str
     child_id: str
     child_name: str
     date: str

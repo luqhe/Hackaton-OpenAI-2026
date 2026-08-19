@@ -46,6 +46,7 @@ class GuardianSettings:
     automatic_blocking_enabled: bool
     real_enforcement_enabled: bool
     release_gate_approved: bool
+    demo_mode: bool = False
 
     @classmethod
     def from_env(cls, environ: Mapping[str, str] | None = None) -> GuardianSettings:
@@ -69,6 +70,10 @@ class GuardianSettings:
                 values.get("GUARDIAN_RELEASE_GATE_APPROVED", "false"),
                 "GUARDIAN_RELEASE_GATE_APPROVED",
             ),
+            demo_mode=parse_bool(
+                values.get("GUARDIAN_DEMO_MODE", "false"),
+                "GUARDIAN_DEMO_MODE",
+            ),
         )
         settings.validate()
         return settings
@@ -77,6 +82,8 @@ class GuardianSettings:
         if not self.api_url.startswith(("http://", "https://")):
             raise ValueError("GUARDIAN_API_URL must start with http:// or https://")
         if self.environment in {Environment.STAGING, Environment.PRODUCTION}:
+            if self.demo_mode:
+                raise ValueError("Demo mode is forbidden in staging/production")
             if self.automatic_blocking_enabled and not self.release_gate_approved:
                 raise ValueError(
                     "Automatic blocking in staging/production requires an approved release gate "

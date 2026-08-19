@@ -41,6 +41,18 @@ def test_nonlocal_automatic_blocking_requires_release_gate() -> None:
         )
 
 
+def test_demo_mode_is_rejected_outside_local_environments() -> None:
+    with pytest.raises(ValueError, match="Demo mode"):
+        GuardianSettings.from_env(
+            environment(
+                {
+                    "GUARDIAN_ENVIRONMENT": "staging",
+                    "GUARDIAN_DEMO_MODE": "true",
+                }
+            )
+        )
+
+
 def test_capabilities_report_only_implemented_features(tmp_path) -> None:
     settings = GuardianSettings.from_env(environment())
     app = create_app(tmp_path / "guardian.db", tmp_path / "evidence", settings=settings)

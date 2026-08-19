@@ -32,6 +32,7 @@ def development_settings(tmp_path: Path, environment: Environment = Environment.
         automatic_blocking_enabled=True,
         real_enforcement_enabled=False,
         release_gate_approved=False,
+        demo_mode=True,
     )
 
 
@@ -313,7 +314,7 @@ def test_png_client_uses_image_content_type(monkeypatch) -> None:
 
 
 def test_png_evidence_is_accessible_from_existing_route(tmp_path) -> None:
-    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    app = create_app(settings=development_settings(tmp_path))
     with TestClient(app) as client:
         incident = client.post("/api/incidents", json=incident_payload()).json()
         uploaded = client.post(

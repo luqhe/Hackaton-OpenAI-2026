@@ -41,7 +41,12 @@ def create_app(
     runtime_settings = settings or GuardianSettings.from_env()
     db_path = database_path or runtime_settings.database_path
     evidence_path = evidence_directory or runtime_settings.evidence_directory
-    store = GuardianStore(db_path, evidence_path)
+    store = GuardianStore(
+        db_path,
+        evidence_path,
+        environment=runtime_settings.environment,
+        demo_mode=runtime_settings.demo_mode,
+    )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):

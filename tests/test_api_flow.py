@@ -3,6 +3,22 @@ from datetime import UTC, datetime
 from fastapi.testclient import TestClient
 
 from api.main import create_app
+from guardian_core.config import GuardianSettings
+
+
+def demo_settings(tmp_path) -> GuardianSettings:
+    return GuardianSettings.from_env(
+        {
+            "GUARDIAN_ENVIRONMENT": "test",
+            "GUARDIAN_DB_PATH": str(tmp_path / "guardian.db"),
+            "GUARDIAN_EVIDENCE_DIR": str(tmp_path / "evidence"),
+            "GUARDIAN_API_URL": "http://testserver",
+            "GUARDIAN_AUTOMATIC_BLOCKING_ENABLED": "false",
+            "GUARDIAN_REAL_ENFORCEMENT_ENABLED": "false",
+            "GUARDIAN_RELEASE_GATE_APPROVED": "false",
+            "GUARDIAN_DEMO_MODE": "true",
+        }
+    )
 
 
 def incident_payload() -> dict:
@@ -34,7 +50,7 @@ def incident_payload() -> dict:
 
 
 def test_complete_incident_unlock_command_flow(tmp_path) -> None:
-    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    app = create_app(settings=demo_settings(tmp_path))
     with TestClient(app) as client:
         assert client.get("/api/health").status_code == 200
 
@@ -87,7 +103,7 @@ def test_complete_incident_unlock_command_flow(tmp_path) -> None:
 
 
 def test_policy_and_daily_report(tmp_path) -> None:
-    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    app = create_app(settings=demo_settings(tmp_path))
     with TestClient(app) as client:
         rules = client.get("/api/children/child-demo/policy").json()
         assert len(rules) == 4
@@ -112,7 +128,7 @@ def test_policy_and_daily_report(tmp_path) -> None:
 
 
 def test_safe_assessment_cannot_create_incident(tmp_path) -> None:
-    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    app = create_app(settings=demo_settings(tmp_path))
     payload = incident_payload()
     payload["assessment"] = {
         "risk": "SAFE",
