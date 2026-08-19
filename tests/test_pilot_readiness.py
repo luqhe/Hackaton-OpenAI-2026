@@ -1,5 +1,6 @@
 from scripts.validate_pilot_readiness import (
     activation_blockers,
+    validate_family_deletion,
     validate_legal_package,
     validate_operational_readiness,
     validate_protocol,
@@ -31,6 +32,7 @@ def test_activation_gate_stays_closed_until_real_approvals_are_recorded() -> Non
     assert "support training roster is not complete" in blockers
     assert "operational alert delivery is not active" in blockers
     assert "on-call roster and drill are not active" in blockers
+    assert "family deletion does not cover pilot external stores" in blockers
 
 
 def test_support_training_is_complete_but_roster_is_honestly_pending() -> None:
@@ -43,3 +45,7 @@ def test_operational_rules_are_valid_without_claiming_live_paging() -> None:
 
 def test_pilot_telemetry_is_minimized_and_matches_command_slo() -> None:
     assert validate_telemetry_instrumentation() == []
+
+
+def test_family_deletion_proof_keeps_external_stores_out_of_scope() -> None:
+    assert validate_family_deletion() == []

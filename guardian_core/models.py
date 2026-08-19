@@ -61,6 +61,14 @@ class CommandStatus(StrEnum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
 
 
+class FamilyDeletionStatus(StrEnum):
+    STARTED = "STARTED"
+    DATABASE_DELETED = "DATABASE_DELETED"
+    COMPLETED = "COMPLETED"
+    FAILED_DATABASE = "FAILED_DATABASE"
+    FAILED_STORAGE_CLEANUP = "FAILED_STORAGE_CLEANUP"
+
+
 class PilotOnboardingStage(StrEnum):
     STARTED = "STARTED"
     PRIVACY_REVIEWED = "PRIVACY_REVIEWED"
@@ -247,6 +255,37 @@ class PilotMetricsReport(BaseModel):
     command_ack_latency_p50_ms: float | None
     command_ack_latency_p95_ms: float | None
     command_ack_latency_max_ms: float | None
+    family_deletion_failures: int
+
+
+class FamilyDeletionCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    families: int = 0
+    children: int = 0
+    devices: int = 0
+    policies: int = 0
+    incidents: int = 0
+    evidence_records: int = 0
+    evidence_files: int = 0
+    commands: int = 0
+    app_sessions: int = 0
+    daily_telemetry: int = 0
+    onboarding_events: int = 0
+    health_samples: int = 0
+
+
+class FamilyDeletionReceipt(BaseModel):
+    """Technical proof without family names, child names, observed content, or evidence paths."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    family_reference_sha256: str
+    status: FamilyDeletionStatus
+    counts: FamilyDeletionCounts
+    requested_at: datetime
+    completed_at: datetime | None = None
 
 
 class DeviceCommand(BaseModel):

@@ -209,6 +209,37 @@ def validate_telemetry_instrumentation() -> list[str]:
     return errors
 
 
+def validate_family_deletion() -> list[str]:
+    errors: list[str] = []
+    config_path = ROOT / "config/pilot/deletion.v1.json"
+    document_path = ROOT / "docs/pilot/family-deletion.md"
+    proof_path = ROOT / "tests/test_family_deletion.py"
+    for path in (config_path, document_path, proof_path):
+        if not path.is_file():
+            errors.append(f"missing family deletion artifact: {path.relative_to(ROOT)}")
+    if errors:
+        return errors
+    deletion = _load_json("config/pilot/deletion.v1.json")
+    if deletion.get("local_mvp_scope_verified") is not True:
+        errors.append("local MVP family deletion must have automated proof")
+    if deletion.get("pilot_scope_verified") is not False:
+        errors.append("pilot deletion cannot be verified before external stores exist and are tested")
+    unresolved = set(deletion.get("unresolved_pilot_stores", []))
+    for store in {
+        "MANAGED_BACKUPS",
+        "OBJECT_STORAGE_AND_REPLICAS",
+        "DEVICE_LOCAL_STATE_AND_OUTBOX",
+        "EXTERNAL_ANALYTICS_AND_ALERTING",
+    }:
+        if store not in unresolved:
+            errors.append(f"family deletion must keep unresolved pilot store visible: {store}")
+    document = document_path.read_text(encoding="utf-8")
+    for marker in ("R5-06", "FAILED_STORAGE_CLEANUP", "tombstone", "ponta a ponta"):
+        if marker not in document:
+            errors.append(f"family deletion document is missing marker {marker}")
+    return errors
+
+
 def activation_blockers() -> list[str]:
     blockers: list[str] = []
     protocol = _load_json("config/pilot/protocol.v1.json")
@@ -229,6 +260,9 @@ def activation_blockers() -> list[str]:
         blockers.append("operational alert delivery is not active")
     if on_call.get("roster_active") is not True:
         blockers.append("on-call roster and drill are not active")
+    deletion = _load_json("config/pilot/deletion.v1.json")
+    if deletion.get("pilot_scope_verified") is not True:
+        blockers.append("family deletion does not cover pilot external stores")
     return blockers
 
 
@@ -246,6 +280,7 @@ def main() -> int:
         + validate_support_training()
         + validate_operational_readiness()
         + validate_telemetry_instrumentation()
+        + validate_family_deletion()
     )
     if errors:
         for error in errors:

@@ -19,6 +19,9 @@ from guardian_core.models import (
     DeviceHeartbeat,
     DevicePairRequest,
     EnforcementAction,
+    FamilyDeletionCounts,
+    FamilyDeletionReceipt,
+    FamilyDeletionStatus,
     Incident,
     IncidentCreate,
     IncidentStatus,
@@ -41,8 +44,15 @@ def _now_iso() -> str:
 
 
 SCHEMA = """
+CREATE TABLE IF NOT EXISTS families (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS children (
     id TEXT PRIMARY KEY,
+    family_id TEXT NOT NULL REFERENCES families(id),
     name TEXT NOT NULL,
     created_at TEXT NOT NULL
 );
@@ -149,6 +159,16 @@ CREATE TABLE IF NOT EXISTS agent_health_samples (
     received_at TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS family_deletion_receipts (
+    id TEXT PRIMARY KEY,
+    family_reference_sha256 TEXT NOT NULL,
+    status TEXT NOT NULL,
+    counts_json TEXT NOT NULL,
+    staging_directory TEXT,
+    requested_at TEXT NOT NULL,
+    completed_at TEXT
+);
+
 CREATE INDEX IF NOT EXISTS idx_incidents_child_occurred
 ON incidents(child_id, occurred_at DESC);
 
@@ -203,36 +223,65 @@ class GuardianStore:
                     f"Database schema version {current_version} is newer than supported version {SCHEMA_VERSION}"
                 )
             connection.executescript(SCHEMA)
+            child_columns = {
+                row["name"] for row in connection.execute("PRAGMA table_info(children)").fetchall()
+            }
+            if "family_id" not in child_columns:
+                connection.execute("ALTER TABLE children ADD COLUMN family_id TEXT")
             now = _now_iso()
-            connection.execute(
-                "INSERT OR IGNORE INTO children(id, name, created_at) VALUES (?, ?, ?)",
-                ("child-demo", "Lucas", now),
-            )
-            connection.execute(
+            demo_reference = self._family_reference("family-demo")
+            demo_deleted = connection.execute(
                 """
-                INSERT OR IGNORE INTO devices(
-                    id, child_id, name, platform, paired_at, last_seen_at, protection_status
-                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                SELECT 1 FROM family_deletion_receipts
+                WHERE family_reference_sha256 = ? AND status = ?
                 """,
-                ("device-demo", "child-demo", "MacBook Pro", "macOS", now, now, "PROTECTED"),
-            )
-            defaults = (
-                (RiskCategory.ADULT_CONTENT, PolicyAction.BLOCK, 0.82),
-                (RiskCategory.HATE_SPEECH, PolicyAction.BLOCK, 0.8),
-                (RiskCategory.DANGEROUS_CONTACT, PolicyAction.BLOCK, 0.75),
-                (RiskCategory.OTHER, PolicyAction.ALERT, 0.85),
-            )
-            for category, action, confidence in defaults:
+                (demo_reference, FamilyDeletionStatus.COMPLETED),
+            ).fetchone()
+            if demo_deleted is None:
+                connection.execute(
+                    "INSERT OR IGNORE INTO families(id, name, created_at) VALUES (?, ?, ?)",
+                    ("family-demo", "Família Demo", now),
+                )
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO policies(
-                        child_id, category, action, minimum_risk, minimum_confidence
-                    ) VALUES (?, ?, ?, ?, ?)
+                    INSERT OR IGNORE INTO children(id, family_id, name, created_at)
+                    VALUES (?, ?, ?, ?)
                     """,
-                    ("child-demo", category, action, RiskLevel.HIGH, confidence),
+                    ("child-demo", "family-demo", "Lucas", now),
                 )
+                connection.execute(
+                    "UPDATE children SET family_id = ? WHERE family_id IS NULL",
+                    ("family-demo",),
+                )
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO devices(
+                        id, child_id, name, platform, paired_at, last_seen_at, protection_status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    ("device-demo", "child-demo", "MacBook Pro", "macOS", now, now, "PROTECTED"),
+                )
+                defaults = (
+                    (RiskCategory.ADULT_CONTENT, PolicyAction.BLOCK, 0.82),
+                    (RiskCategory.HATE_SPEECH, PolicyAction.BLOCK, 0.8),
+                    (RiskCategory.DANGEROUS_CONTACT, PolicyAction.BLOCK, 0.75),
+                    (RiskCategory.OTHER, PolicyAction.ALERT, 0.85),
+                )
+                for category, action, confidence in defaults:
+                    connection.execute(
+                        """
+                        INSERT OR IGNORE INTO policies(
+                            child_id, category, action, minimum_risk, minimum_confidence
+                        ) VALUES (?, ?, ?, ?, ?)
+                        """,
+                        ("child-demo", category, action, RiskLevel.HIGH, confidence),
+                    )
             connection.execute(f"PRAGMA user_version = {SCHEMA_VERSION}")
             connection.execute("PRAGMA optimize")
+
+    @staticmethod
+    def _family_reference(family_id: str) -> str:
+        return hashlib.sha256(family_id.encode("utf-8")).hexdigest()
 
     def child_exists(self, child_id: str) -> bool:
         with self.connect() as connection:
@@ -391,6 +440,274 @@ class GuardianStore:
         return PilotOnboardingEvent(**dict(row))
 
     @staticmethod
+    def _placeholders(values: list[str]) -> str:
+        return ",".join("?" for _ in values)
+
+    def _deletion_counts(
+        self,
+        connection: sqlite3.Connection,
+        family_id: str,
+        child_ids: list[str],
+        device_ids: list[str],
+        incident_ids: list[str],
+        evidence_files: int,
+    ) -> FamilyDeletionCounts:
+        def count_for_ids(table: str, column: str, values: list[str]) -> int:
+            if not values:
+                return 0
+            row = connection.execute(
+                f"SELECT COUNT(*) AS total FROM {table} WHERE {column} IN ({self._placeholders(values)})",
+                values,
+            ).fetchone()
+            return int(row["total"])
+
+        return FamilyDeletionCounts(
+            families=int(
+                connection.execute(
+                    "SELECT COUNT(*) AS total FROM families WHERE id = ?", (family_id,)
+                ).fetchone()["total"]
+            ),
+            children=len(child_ids),
+            devices=len(device_ids),
+            policies=count_for_ids("policies", "child_id", child_ids),
+            incidents=len(incident_ids),
+            evidence_records=count_for_ids("incident_evidence", "incident_id", incident_ids),
+            evidence_files=evidence_files,
+            commands=count_for_ids("device_commands", "device_id", device_ids),
+            app_sessions=count_for_ids("app_sessions", "child_id", child_ids),
+            daily_telemetry=count_for_ids("daily_telemetry", "child_id", child_ids),
+            onboarding_events=count_for_ids("pilot_onboarding_events", "child_id", child_ids),
+            health_samples=count_for_ids("agent_health_samples", "device_id", device_ids),
+        )
+
+    def _set_deletion_status(
+        self,
+        receipt_id: str,
+        status: FamilyDeletionStatus,
+        *,
+        staging_directory: Path | None = None,
+        completed_at: str | None = None,
+    ) -> None:
+        with self.connect() as connection:
+            connection.execute(
+                """
+                UPDATE family_deletion_receipts
+                SET status = ?, staging_directory = ?, completed_at = ?
+                WHERE id = ?
+                """,
+                (
+                    status,
+                    str(staging_directory) if staging_directory is not None else None,
+                    completed_at,
+                    receipt_id,
+                ),
+            )
+
+    def get_family_deletion_receipt(self, receipt_id: str) -> FamilyDeletionReceipt:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT id, family_reference_sha256, status, counts_json,
+                       requested_at, completed_at
+                FROM family_deletion_receipts WHERE id = ?
+                """,
+                (receipt_id,),
+            ).fetchone()
+        if row is None:
+            raise KeyError(receipt_id)
+        return FamilyDeletionReceipt(
+            id=row["id"],
+            family_reference_sha256=row["family_reference_sha256"],
+            status=row["status"],
+            counts=FamilyDeletionCounts.model_validate_json(row["counts_json"]),
+            requested_at=row["requested_at"],
+            completed_at=row["completed_at"],
+        )
+
+    def delete_family(self, family_id: str) -> FamilyDeletionReceipt:
+        """Delete the complete family scope implemented by the local control plane."""
+        receipt_id = f"del-{uuid.uuid4().hex[:16]}"
+        requested_at = _now_iso()
+        evidence_root = self.evidence_directory.resolve()
+        with self.connect() as connection:
+            family = connection.execute("SELECT 1 FROM families WHERE id = ?", (family_id,)).fetchone()
+            if family is None:
+                raise KeyError(family_id)
+            child_ids = [
+                row["id"]
+                for row in connection.execute(
+                    "SELECT id FROM children WHERE family_id = ?", (family_id,)
+                ).fetchall()
+            ]
+            device_ids = (
+                [
+                    row["id"]
+                    for row in connection.execute(
+                        f"SELECT id FROM devices WHERE child_id IN ({self._placeholders(child_ids)})",
+                        child_ids,
+                    ).fetchall()
+                ]
+                if child_ids
+                else []
+            )
+            incident_ids = (
+                [
+                    row["id"]
+                    for row in connection.execute(
+                        f"SELECT id FROM incidents WHERE child_id IN ({self._placeholders(child_ids)})",
+                        child_ids,
+                    ).fetchall()
+                ]
+                if child_ids
+                else []
+            )
+            evidence_rows = (
+                connection.execute(
+                    f"""
+                    SELECT file_path FROM incident_evidence
+                    WHERE incident_id IN ({self._placeholders(incident_ids)})
+                    """,
+                    incident_ids,
+                ).fetchall()
+                if incident_ids
+                else []
+            )
+            source_files: list[Path] = []
+            for row in evidence_rows:
+                source = Path(row["file_path"]).resolve()
+                if evidence_root not in source.parents:
+                    raise ValueError("Family evidence path escapes the configured evidence directory")
+                if source.is_file():
+                    source_files.append(source)
+            counts = self._deletion_counts(
+                connection,
+                family_id,
+                child_ids,
+                device_ids,
+                incident_ids,
+                len(source_files),
+            )
+            connection.execute(
+                """
+                INSERT INTO family_deletion_receipts(
+                    id, family_reference_sha256, status, counts_json,
+                    staging_directory, requested_at, completed_at
+                ) VALUES (?, ?, ?, ?, NULL, ?, NULL)
+                """,
+                (
+                    receipt_id,
+                    self._family_reference(family_id),
+                    FamilyDeletionStatus.STARTED,
+                    counts.model_dump_json(),
+                    requested_at,
+                ),
+            )
+
+        staging_directory = evidence_root / ".deletion-staging" / receipt_id
+        staged_files: list[tuple[Path, Path]] = []
+        try:
+            if source_files:
+                staging_directory.mkdir(parents=True, exist_ok=False)
+                for source in source_files:
+                    staged = staging_directory / source.name
+                    source.replace(staged)
+                    staged_files.append((source, staged))
+                self._set_deletion_status(
+                    receipt_id,
+                    FamilyDeletionStatus.STARTED,
+                    staging_directory=staging_directory,
+                )
+        except OSError as error:
+            for source, staged in staged_files:
+                if staged.is_file():
+                    staged.replace(source)
+            if staging_directory.is_dir():
+                try:
+                    staging_directory.rmdir()
+                except OSError:
+                    pass
+            self._set_deletion_status(
+                receipt_id,
+                FamilyDeletionStatus.FAILED_STORAGE_CLEANUP,
+                staging_directory=staging_directory if staging_directory.exists() else None,
+            )
+            raise RuntimeError("Unable to stage family evidence for deletion") from error
+
+        try:
+            with self.connect() as connection:
+                if device_ids:
+                    placeholders = self._placeholders(device_ids)
+                    connection.execute(
+                        f"DELETE FROM device_commands WHERE device_id IN ({placeholders})", device_ids
+                    )
+                    connection.execute(
+                        f"DELETE FROM agent_health_samples WHERE device_id IN ({placeholders})",
+                        device_ids,
+                    )
+                if incident_ids:
+                    placeholders = self._placeholders(incident_ids)
+                    connection.execute(
+                        f"DELETE FROM incident_evidence WHERE incident_id IN ({placeholders})",
+                        incident_ids,
+                    )
+                    connection.execute(f"DELETE FROM incidents WHERE id IN ({placeholders})", incident_ids)
+                if child_ids:
+                    placeholders = self._placeholders(child_ids)
+                    for table in (
+                        "pilot_onboarding_events",
+                        "daily_telemetry",
+                        "app_sessions",
+                        "policies",
+                    ):
+                        connection.execute(
+                            f"DELETE FROM {table} WHERE child_id IN ({placeholders})", child_ids
+                        )
+                    connection.execute(f"DELETE FROM devices WHERE child_id IN ({placeholders})", child_ids)
+                    connection.execute(f"DELETE FROM children WHERE id IN ({placeholders})", child_ids)
+                connection.execute("DELETE FROM families WHERE id = ?", (family_id,))
+                connection.execute(
+                    "UPDATE family_deletion_receipts SET status = ? WHERE id = ?",
+                    (FamilyDeletionStatus.DATABASE_DELETED, receipt_id),
+                )
+        except Exception:
+            for source, staged in staged_files:
+                if staged.is_file():
+                    staged.replace(source)
+            if staging_directory.is_dir():
+                try:
+                    staging_directory.rmdir()
+                except OSError:
+                    pass
+            self._set_deletion_status(receipt_id, FamilyDeletionStatus.FAILED_DATABASE)
+            raise
+
+        try:
+            for _, staged in staged_files:
+                staged.unlink(missing_ok=True)
+            if staging_directory.is_dir():
+                staging_directory.rmdir()
+            staging_root = evidence_root / ".deletion-staging"
+            if staging_root.is_dir():
+                try:
+                    staging_root.rmdir()
+                except OSError:
+                    pass
+        except OSError as error:
+            self._set_deletion_status(
+                receipt_id,
+                FamilyDeletionStatus.FAILED_STORAGE_CLEANUP,
+                staging_directory=staging_directory,
+            )
+            raise RuntimeError("Family database deleted but evidence cleanup is incomplete") from error
+
+        self._set_deletion_status(
+            receipt_id,
+            FamilyDeletionStatus.COMPLETED,
+            completed_at=_now_iso(),
+        )
+        return self.get_family_deletion_receipt(receipt_id)
+
+    @staticmethod
     def _percentile(values: list[float], percentile: float) -> float | None:
         if not values:
             return None
@@ -430,6 +747,17 @@ class GuardianStore:
                 """,
                 (window_start,),
             ).fetchall()
+            deletion_failures = connection.execute(
+                """
+                SELECT COUNT(*) AS total FROM family_deletion_receipts
+                WHERE requested_at >= ? AND status IN (?, ?)
+                """,
+                (
+                    window_start,
+                    FamilyDeletionStatus.FAILED_DATABASE,
+                    FamilyDeletionStatus.FAILED_STORAGE_CLEANUP,
+                ),
+            ).fetchone()["total"]
 
         funnel_by_stage = {row["stage"]: dict(row) for row in funnel_rows}
         onboarding = [
@@ -478,6 +806,7 @@ class GuardianStore:
             command_ack_latency_p50_ms=self._percentile(latencies_ms, 0.50),
             command_ack_latency_p95_ms=self._percentile(latencies_ms, 0.95),
             command_ack_latency_max_ms=round(max(latencies_ms), 3) if latencies_ms else None,
+            family_deletion_failures=deletion_failures,
         )
 
     def get_policy(self, child_id: str) -> list[PolicyRule]:
