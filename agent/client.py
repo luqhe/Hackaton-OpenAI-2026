@@ -28,6 +28,7 @@ class GuardianAPIClient:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         nonce_factory: Callable[[], str] = lambda: secrets.token_urlsafe(18),
         allow_insecure_localhost: bool = False,
+        demo_mode: bool = False,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -35,6 +36,7 @@ class GuardianAPIClient:
         self.clock = clock
         self.nonce_factory = nonce_factory
         self.allow_insecure_localhost = allow_insecure_localhost
+        self.demo_mode = demo_mode
         self._parsed_base_url = urlsplit(self.base_url)
         if credential is not None:
             self._require_secure_transport()
@@ -77,6 +79,8 @@ class GuardianAPIClient:
         else:
             data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         headers = {"Content-Type": content_type, "Accept": "application/json"}
+        if self.demo_mode and not authenticated:
+            headers["X-Guardian-Demo"] = "true"
         if authenticated:
             if self.credential is None:
                 raise GuardianAPIError("device credential is required for authenticated request")
