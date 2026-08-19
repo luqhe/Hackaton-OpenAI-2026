@@ -48,6 +48,8 @@ def test_development_example_is_locally_runnable() -> None:
 
     assert settings.object_store_provider == "filesystem"
     assert settings.evidence_grant_ttl_seconds == 120
+    assert len(settings.audit_hmac_secret) >= 32
+    assert len(settings.rate_limit_hmac_secret) >= 32
 
 
 @pytest.mark.parametrize("environment", ["staging", "production"])

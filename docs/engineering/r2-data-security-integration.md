@@ -2,7 +2,7 @@
 
 ## Dependências já integradas
 
-Esta branch inclui a fundação de identidade `6c83be4`. Todos os serviços recebem `guardian_core.identity.FamilyScope`; o único tenant aceito é `scope.family_id`. IDs opacos nunca ampliam o escopo.
+Esta branch inclui a fundação de identidade da Etapa 2. Todos os serviços recebem `guardian_core.identity.FamilyScope`; o único tenant aceito é `scope.family_id`. IDs opacos nunca ampliam o escopo.
 
 O schema data-security é uma migration aditiva posterior ao schema SQLite v2. Ela pressupõe `families(id)` e `incidents(family_id, id)` e adiciona FKs compostas para `evidence_objects` e `evidence_access_grants`. O integrador deve executá-la depois da migração v1→v2 e antes de habilitar rotas de evidência/auditoria.
 

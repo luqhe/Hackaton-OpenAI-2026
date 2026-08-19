@@ -81,10 +81,10 @@ class DataSecuritySettings:
             kms_key_id=values.get("GUARDIAN_KMS_KEY_ID", ""),
             audit_hmac_key_id=values.get("GUARDIAN_AUDIT_HMAC_KEY_ID", "development-audit-v1"),
             audit_hmac_secret=values.get(
-                "GUARDIAN_AUDIT_HMAC_SECRET", "development-audit-secret-key-32"
+                "GUARDIAN_AUDIT_HMAC_SECRET", "development-audit-secret-key-000"
             ).encode(),
             rate_limit_hmac_secret=values.get(
-                "GUARDIAN_RATE_LIMIT_HMAC_SECRET", "development-rate-secret-key-000"
+                "GUARDIAN_RATE_LIMIT_HMAC_SECRET", "development-rate-secret-key-0000"
             ).encode(),
             evidence_grant_ttl_seconds=_parse_pool_size(values, "GUARDIAN_EVIDENCE_GRANT_TTL_SECONDS", 120),
         )
