@@ -1,6 +1,6 @@
 import pytest
 
-from agent.scheduler import AdaptiveObservationSchedule
+from agent.scheduler import AdaptiveObservationSchedule, SuspensionDetector
 
 
 def test_inactivity_backs_off_until_configured_maximum() -> None:
@@ -35,3 +35,13 @@ def test_activity_and_wake_restore_minimum_interval() -> None:
 def test_invalid_schedule_configuration_is_rejected(values, message) -> None:
     with pytest.raises(ValueError, match=message):
         AdaptiveObservationSchedule(**values)
+
+
+def test_suspension_detector_distinguishes_normal_interval_from_wake() -> None:
+    now = [100.0]
+    detector = SuspensionDetector(grace_seconds=5, clock=lambda: now[0])
+
+    now[0] += 10
+    assert detector.check(expected_interval=10) is False
+    now[0] += 120
+    assert detector.check(expected_interval=10) is True

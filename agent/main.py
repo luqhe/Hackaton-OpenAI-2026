@@ -14,7 +14,7 @@ from agent.enforcer import DemoEnforcer, MacOSEnforcer
 from agent.evidence import EphemeralCapture, build_minimal_png
 from agent.observer import MacOSObserver, ObserverPermissionError
 from agent.outbox import OutboxItem, PersistentOutbox
-from agent.scheduler import AdaptiveObservationSchedule
+from agent.scheduler import AdaptiveObservationSchedule, SuspensionDetector
 from agent.state import AgentStateStore
 from agent.structured_log import StructuredAgentLogger
 from guardian_core.config import Environment, GuardianSettings
@@ -302,9 +302,14 @@ def run_observer(args: argparse.Namespace) -> int:
         maximum_seconds=args.maximum_interval,
         backoff_factor=args.backoff_factor,
     )
+    suspension_detector = SuspensionDetector()
     cycle = 0
 
     while args.max_cycles == 0 or cycle < args.max_cycles:
+        if suspension_detector.check(expected_interval=schedule.current_seconds):
+            observer.reset_after_wake()
+            schedule.report_wake()
+            AGENT_LOGGER.event("system_wake_detected")
         cycle += 1
         delivered = flush_offline_outbox(outbox, client)
         if delivered:

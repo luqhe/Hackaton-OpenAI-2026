@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 
 
@@ -38,3 +40,25 @@ class AdaptiveObservationSchedule:
     def report_wake(self) -> float:
         self._current_seconds = self.minimum_seconds
         return self._current_seconds
+
+
+@dataclass(slots=True)
+class SuspensionDetector:
+    """Detects a likely system sleep from an unexpectedly large monotonic gap."""
+
+    grace_seconds: float = 5
+    clock: Callable[[], float] = time.monotonic
+    _last_check: float = field(init=False)
+
+    def __post_init__(self) -> None:
+        if self.grace_seconds < 0:
+            raise ValueError("grace_seconds cannot be negative")
+        self._last_check = self.clock()
+
+    def check(self, *, expected_interval: float) -> bool:
+        if expected_interval < 0:
+            raise ValueError("expected_interval cannot be negative")
+        now = self.clock()
+        elapsed = now - self._last_check
+        self._last_check = now
+        return elapsed > expected_interval + self.grace_seconds
