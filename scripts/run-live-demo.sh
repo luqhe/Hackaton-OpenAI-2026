@@ -39,7 +39,7 @@ if ! agent_help="$("$python" -m agent.main --help 2>&1)"; then
 fi
 
 if [[ "$agent_help" == *"live-demo"* ]]; then
-  printf 'source=LOCAL_LIVE_DEMO\n'
+  printf 'mode=OPTIONAL_LIVE_DEMO\n'
   if "$python" -m agent.main live-demo --controlled-demo --wait-for-unlock; then
     exit 0
   else

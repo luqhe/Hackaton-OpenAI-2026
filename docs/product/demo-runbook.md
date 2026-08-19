@@ -2,13 +2,14 @@
 
 ## Classificação oficial
 
-Esta entrega é **local e determinística**. A API, o chat sintético, o classificador, a política,
-o SQLite e as evidências rodam no Mac da apresentação. O roteiro não usa OpenAI, chave de API,
-créditos, nuvem, captura real de tela, Docker ou rede externa.
+O caminho oficial desta entrega é **local e determinístico**. A API, o chat sintético, a
+classificação por fixture, a política, o SQLite e as evidências rodam no Mac da apresentação,
+sem OpenAI, chave de API, créditos, nuvem, captura real de tela, Docker ou rede externa.
 
-O launcher sempre declara a origem no terminal:
+O launcher sempre declara o modo ou a origem no terminal:
 
-- `source=LOCAL_LIVE_DEMO`: o subcomando local `live-demo` existe e iniciou;
+- `mode=OPTIONAL_LIVE_DEMO`: o subcomando opcional `live-demo` existe e iniciou; ele declara
+  sua própria origem, como `source=OPENAI`;
 - `source=LOCAL_FIXTURE`: o subcomando não existe e a fixture oficial foi usada;
 - `source=FIXTURE_FALLBACK`: o subcomando existia, mostrou uma falha e a fixture foi iniciada
   separadamente.
@@ -26,8 +27,8 @@ bash scripts/check.sh
 bash scripts/reset-demo.sh
 ```
 
-Feche abas antigas do Guardian. Deixe dois terminais visíveis e o navegador pronto. Não defina
-`OPENAI_API_KEY`: ela não é lida nem necessária.
+Feche abas antigas do Guardian. Deixe dois terminais visíveis e o navegador pronto.
+`OPENAI_API_KEY` não é necessária para o caminho oficial e seu valor nunca é exibido.
 
 ## Roteiro cronometrado
 
@@ -57,7 +58,8 @@ No Terminal 2:
 bash scripts/run-live-demo.sh
 ```
 
-O launcher valida apenas o runtime e a API locais, abre `/demo-chat` e imprime `source=...`.
+O launcher valida apenas o runtime e a API locais, abre `/demo-chat` e imprime `mode=...` ou
+`source=...`.
 Não esconda uma eventual mensagem de erro de `live-demo`; mostre a linha
 `source=FIXTURE_FALLBACK` antes de a fixture separada começar. Aguarde no terminal as linhas
 `assessment=`, `decision=`, `incident=`, `parent_view=` e `child_view=`.

@@ -43,7 +43,7 @@ if [[ "$*" != "-m agent.main live-demo --controlled-demo --wait-for-unlock" ]]; 
   printf 'unexpected agent arguments: %s\\n' "$*" >&2
   exit 64
 fi
-printf 'live-demo-output\\n'
+printf 'source=OPENAI\\n'
 {live_error}exit {live_exit_code}
 """,
     )
@@ -96,12 +96,13 @@ def test_launcher_reports_live_failure_before_fixture_fallback(tmp_path: Path) -
     assert "fixture-run" in result.stdout
 
 
-def test_launcher_keeps_successful_local_live_demo_as_the_source(tmp_path: Path) -> None:
+def test_launcher_preserves_the_optional_live_demo_source(tmp_path: Path) -> None:
     result, _ = run_launcher(tmp_path, help_output="{demo,live-demo,poll}")
 
     assert result.returncode == 0
-    assert "source=LOCAL_LIVE_DEMO" in result.stdout
-    assert "live-demo-output" in result.stdout
+    assert "mode=OPTIONAL_LIVE_DEMO" in result.stdout
+    assert "source=OPENAI" in result.stdout
+    assert "source=LOCAL_LIVE_DEMO" not in result.stdout
     assert "fixture-run" not in result.stdout
 
 
