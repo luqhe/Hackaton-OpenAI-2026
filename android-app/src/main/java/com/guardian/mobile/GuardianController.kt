@@ -60,7 +60,12 @@ class GuardianController(
         val nextIncidents = api.incidents()
         val nextReport = api.dailyReport()
         val nextCapabilities = api.capabilities()
-        val nextDevice = runCatching { api.device(deviceId) }.getOrNull()
+        val fetchedDevice = runCatching { api.device(deviceId) }.getOrNull()
+        val nextDevice = if (fetchedDevice?.platform.equals("Android", ignoreCase = true)) {
+            runCatching { api.heartbeat(deviceId) }.getOrDefault(fetchedDevice)
+        } else {
+            fetchedDevice
+        }
         onMain {
             incidents = nextIncidents
             report = nextReport
@@ -138,11 +143,13 @@ class GuardianController(
     }
 
     fun pairThisDevice() = load(successMessage = "Android device paired") {
+        val api = GuardianApi(apiUrl)
         val name = "${Build.MANUFACTURER} ${Build.MODEL}".trim()
-        val paired = GuardianApi(apiUrl).pairDevice("child-demo", name)
+        val paired = api.pairDevice("child-demo", name)
+        val activeDevice = runCatching { api.heartbeat(paired.id) }.getOrDefault(paired)
         onMain {
             deviceId = paired.id
-            device = paired
+            device = activeDevice
             preferences.edit().putString("device_id", paired.id).apply()
         }
     }
