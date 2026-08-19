@@ -25,6 +25,24 @@ const policyDescriptions = {
   OTHER: "Sinais ainda não classificados",
 };
 
+const icons = {
+  alert: `<svg aria-hidden="true" viewBox="0 0 24 24"><path d="M12 3.5 21 20H3L12 3.5Z"/><path d="M12 9v5M12 17.5h.01"/></svg>`,
+  check: `<svg aria-hidden="true" viewBox="0 0 24 24"><path d="m5 12.5 4.2 4.2L19 7"/></svg>`,
+};
+
+const incidentExplanations = {
+  DANGEROUS_CONTACT:
+    "A conversa pede progressivamente idade, escola, perfil social, fotos ou localização. Em conjunto, esses sinais podem indicar uma tentativa insegura de obter informações pessoais.",
+};
+
+const evidenceTerms = {
+  age: "idade",
+  school: "escola",
+  social: "perfil social",
+  photo: "foto",
+  location: "localização",
+};
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -32,6 +50,17 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function incidentExplanation(incident) {
+  return incidentExplanations[incident.category] || incident.explanation;
+}
+
+function formatEvidence(value) {
+  const prefix = "Progressive request detected:";
+  if (!value.startsWith(prefix)) return value;
+  const term = value.slice(prefix.length).trim();
+  return `Pedido progressivo identificado: ${evidenceTerms[term] || term}`;
 }
 
 async function api(path, options = {}) {
@@ -94,7 +123,7 @@ function formatDate(value) {
 function incidentRow(incident) {
   return `
     <a class="incident-row" href="/incidents/${encodeURIComponent(incident.id)}">
-      <span class="risk-icon" aria-hidden="true">!</span>
+      <span class="risk-icon">${icons.alert}</span>
       <div>
         <strong>${escapeHtml(labels[incident.category] || incident.category)}</strong>
         <p>${escapeHtml(incident.application)} · ${formatDate(incident.occurred_at)}</p>
@@ -112,7 +141,7 @@ async function dashboard() {
   ]);
   const latest = incidents.length
     ? incidents.slice(0, 5).map(incidentRow).join("")
-    : `<div class="empty"><div class="empty-mark">✓</div><h3>Nenhum incidente hoje</h3><p>${productCapabilities.real_screen_observation ? "O Guardian continuará analisando mudanças relevantes sem armazenar continuamente a tela." : "Execute uma fixture controlada para demonstrar a análise contextual local."}</p></div>`;
+    : `<div class="empty"><div class="empty-mark">${icons.check}</div><h3>Nenhum incidente hoje</h3><p>${productCapabilities.real_screen_observation ? "O Guardian continuará analisando mudanças relevantes sem armazenar continuamente a tela." : "Execute uma fixture controlada para demonstrar a análise contextual local."}</p></div>`;
   const deviceStatus = productCapabilities.real_screen_observation
     ? `<strong>● Protegido</strong><span>Observação real ativa</span>`
     : `<strong>◌ Modo de demonstração</strong><span>Entrada por fixtures controladas</span>`;
@@ -120,31 +149,31 @@ async function dashboard() {
     ? "Mudanças analisadas"
     : "Observações da demo";
   app.innerHTML = `
-    <div class="card profile-strip">
+    <div class="profile-strip context-panel">
       <div class="avatar">L</div>
       <div class="profile-copy"><h2>Lucas</h2><p>${escapeHtml(device.name)} · ${escapeHtml(device.platform)}</p></div>
       <div class="device-state">${deviceStatus}</div>
     </div>
-    <div class="section-heading"><h2>Hoje</h2><span></span></div>
-    <div class="grid metrics">
-      <div class="card metric"><span class="metric-label">Tempo de tela</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Uso agregado no dispositivo</span></div>
-      <div class="card metric"><span class="metric-label">Incidentes de segurança</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">${report.interventions} intervenções realizadas</span></div>
-      <div class="card metric"><span class="metric-label">${observationLabel}</span><strong class="metric-value">${report.screen_changes}</strong><span class="metric-detail">Fixtures e telemetria local do MVP</span></div>
-    </div>
-    <div class="grid two">
+    <div class="protection-layout">
       <div>
-        <div class="section-heading"><h2>Atividade de proteção</h2><a href="/child">Ver relatório diário →</a></div>
-        <div class="card incident-list">${latest}</div>
+        <div class="section-heading section-heading-primary"><div><p class="section-kicker">Prioridade</p><h2>Atividade de proteção</h2></div><a href="/child">Relatório diário →</a></div>
+        <div class="surface incident-list">${latest}</div>
       </div>
       <div>
         <div class="section-heading"><h2>Como o Guardian decide</h2></div>
-        <div class="card insight">
+        <div class="insight">
           <p class="eyebrow">CONTEXTO, NÃO PALAVRAS ISOLADAS</p>
           <h2>Arquitetura preparada para entender contexto.</h2>
           <p>Demo atual: fixture + texto + histórico recente + política familiar. Captura e OCR reais são a próxima etapa.</p>
           <div class="signal-row" aria-label="Quatro sinais contextuais ativos"><span class="on"></span><span class="on"></span><span class="on"></span><span></span></div>
         </div>
       </div>
+    </div>
+    <div class="section-heading summary-heading"><div><p class="section-kicker">Resumo</p><h2>Hoje</h2></div></div>
+    <div class="summary-panel">
+      <div class="metric"><span class="metric-label">Tempo de tela</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Uso agregado no dispositivo</span></div>
+      <div class="metric"><span class="metric-label">Incidentes de segurança</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">${report.interventions} intervenções realizadas</span></div>
+      <div class="metric"><span class="metric-label">${observationLabel}</span><strong class="metric-value">${report.screen_changes}</strong><span class="metric-detail">Fixtures e telemetria local do MVP</span></div>
     </div>`;
 }
 
@@ -159,7 +188,7 @@ async function incidentDetail(id) {
         <div><p class="eyebrow">INCIDENTE DE ALTA PRIORIDADE</p><h2>${escapeHtml(labels[incident.category] || incident.category)}</h2></div>
         <span class="status ${incident.status.toLowerCase()}">${escapeHtml(labels[incident.status] || incident.status)}</span>
       </div>
-      <p class="lead">${escapeHtml(incident.explanation)}</p>
+      <p class="lead">${escapeHtml(incidentExplanation(incident))}</p>
       <div class="facts">
         <div class="fact"><span>Aplicativo</span><strong>${escapeHtml(incident.application)}</strong></div>
         <div class="fact"><span>Direção</span><strong>${incident.direction === "CHILD_AS_TARGET" ? "Lucas como alvo" : escapeHtml(incident.direction)}</strong></div>
@@ -171,11 +200,11 @@ async function incidentDetail(id) {
       <section>
         <div class="section-heading"><h2>Sinais relevantes</h2></div>
         <div class="card card-pad">
-          <ul class="evidence-list">${incident.evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          <ul class="evidence-list">${incident.evidence.map((item) => `<li>${escapeHtml(formatEvidence(item))}</li>`).join("")}</ul>
         </div>
         ${incident.screenshot_urls.length ? `<div class="section-heading"><h2>Evidência selecionada</h2></div><div class="card card-pad">${incident.screenshot_urls.map((url, index) => `<iframe class="evidence-frame" src="${escapeHtml(url)}" title="Evidência ${index + 1}" sandbox></iframe>`).join("")}</div>` : ""}
       </section>
-      <aside>
+      <aside class="decision-aside">
         <div class="section-heading"><h2>Decisão da família</h2></div>
         <div class="card card-pad">
           ${incident.child_explanation ? `<p class="eyebrow">EXPLICAÇÃO DE LUCAS</p><p>${escapeHtml(incident.child_explanation)}</p>` : `<p class="lead">Lucas ainda não enviou uma explicação para este bloqueio.</p>`}
@@ -214,7 +243,7 @@ async function childPage() {
       <section class="card child-warning">
         <p class="eyebrow">INTERVENÇÃO DO GUARDIAN</p>
         <h2>${escapeHtml(incident.application)} foi temporariamente bloqueado.</h2>
-        <p>${escapeHtml(incident.explanation)} Não compartilhe escola, endereço, fotos privadas ou outros dados pessoais com quem você não conhece.</p>
+        <p>${escapeHtml(incidentExplanation(incident))} Não compartilhe escola, endereço, fotos privadas ou outros dados pessoais com quem você não conhece.</p>
         ${
           ["BLOCKED", "UNLOCK_REQUESTED"].includes(incident.status)
             ? `
@@ -231,10 +260,10 @@ async function childPage() {
   app.innerHTML = `
     ${warning}
     <div class="section-heading"><h2>Seu dia digital</h2></div>
-    <div class="grid metrics">
-      <div class="card metric"><span class="metric-label">Uso do dispositivo</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Sem julgamento de produtividade</span></div>
-      <div class="card metric"><span class="metric-label">Incidentes</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">Eventos compartilhados com seu responsável</span></div>
-      <div class="card metric"><span class="metric-label">Evidências compartilhadas</span><strong class="metric-value">${report.evidence_count}</strong><span class="metric-detail">Somente evidência mínima de incidente</span></div>
+    <div class="summary-panel">
+      <div class="metric"><span class="metric-label">Uso do dispositivo</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Sem julgamento de produtividade</span></div>
+      <div class="metric"><span class="metric-label">Incidentes</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">Eventos compartilhados com seu responsável</span></div>
+      <div class="metric"><span class="metric-label">Evidências compartilhadas</span><strong class="metric-value">${report.evidence_count}</strong><span class="metric-detail">Somente evidência mínima de incidente</span></div>
     </div>
     <div class="grid two">
       <section>
