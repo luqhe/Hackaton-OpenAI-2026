@@ -80,7 +80,7 @@ class FakeClient:
         self.uploads = []
         self.telemetry = []
 
-    def get_policy(self, child_id):
+    def get_device_policy(self):
         self.events.append("policy")
         return [
             {
@@ -91,20 +91,20 @@ class FakeClient:
             }
         ]
 
-    def record_telemetry(self, device_id, payload):
+    def record_device_telemetry(self, payload):
         self.events.append("telemetry")
-        self.telemetry.append((device_id, payload))
+        self.telemetry.append(payload)
 
     def record_heartbeat(self, device_id, payload):
         self.events.append("heartbeat")
         return {"id": device_id, "protection_status": "PROTECTED"}
 
-    def create_incident(self, payload):
+    def create_device_incident(self, payload):
         self.events.append("incident")
         self.incidents.append(payload)
         return {"id": "incident-live", "status": "BLOCKED"}
 
-    def upload_png_evidence(self, incident_id, content):
+    def upload_device_png_evidence(self, incident_id, content):
         self.events.append("upload")
         self.uploads.append((incident_id, content))
         return {"id": "evidence-live", "url": "/api/evidence/evidence-live"}
@@ -150,7 +150,7 @@ def configure_live_fakes(monkeypatch, tmp_path, assessment):
     settings = development_settings(tmp_path)
     monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
     monkeypatch.setattr(agent_main, "MacOSObserver", lambda: observer)
-    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: client)
+    monkeypatch.setattr(agent_main, "build_authenticated_client", lambda api_url: client)
     monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: enforcer)
     monkeypatch.setattr(agent_main, "assess_screenshot", lambda *args, **kwargs: assessment)
     return events, observer, client, enforcer
@@ -194,6 +194,8 @@ def test_live_demo_captures_assesses_uploads_then_blocks(monkeypatch, tmp_path, 
         assert uploaded_image.size == (8, 8)
     assert client.incidents[0]["assessment"]["risk"] == "HIGH"
     assert "action" not in client.incidents[0]["assessment"]
+    assert "child_id" not in client.incidents[0]
+    assert "device_id" not in client.incidents[0]
     assert observer.screenshot_path is not None
     assert not observer.screenshot_path.exists()
 
@@ -282,8 +284,7 @@ def test_wait_for_unlock_reuses_existing_polling(monkeypatch, tmp_path) -> None:
 
     assert agent_main.run_live_demo(live_args(tmp_path, wait_for_unlock=True)) == 0
 
-    assert polling[0][0] == (client, "device-demo", enforcer, 0)
-    assert isinstance(polling[0][1]["state_store"], AgentStateStore)
+    assert polling == [(client, enforcer, 0)]
 
 
 def test_png_client_uses_image_content_type(monkeypatch) -> None:
