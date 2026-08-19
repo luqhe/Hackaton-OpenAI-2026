@@ -13,6 +13,7 @@ from agent.context import ObservationContextBuffer
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
 from agent.evidence import EphemeralCapture, build_minimal_png
 from agent.observer import MacOSObserver, ObserverPermissionError
+from agent.outbox import OutboxItem, PersistentOutbox
 from agent.scheduler import AdaptiveObservationSchedule
 from agent.state import AgentStateStore
 from guardian_core.config import Environment, GuardianSettings
@@ -46,6 +47,47 @@ def apply_validated_policy(
     decision = apply_policy(assessment, rules)
     decision = apply_runtime_release_gate(decision, settings, fixture_input=fixture_input)
     return assessment, decision
+
+
+def flush_offline_outbox(outbox: PersistentOutbox, client: GuardianAPIClient) -> int:
+    def deliver(item: OutboxItem) -> bool:
+        try:
+            if item.kind == "TELEMETRY":
+                client.record_telemetry(item.device_id, item.payload)
+            else:
+                client.create_incident(item.payload)
+        except GuardianAPIError:
+            return False
+        return True
+
+    return outbox.flush(deliver)
+
+
+def record_telemetry_or_queue(
+    client: GuardianAPIClient,
+    outbox: PersistentOutbox,
+    device_id: str,
+    payload: dict[str, object],
+) -> None:
+    try:
+        client.record_telemetry(device_id, payload)
+    except GuardianAPIError:
+        item = outbox.enqueue("TELEMETRY", device_id, payload)
+        print(f"offline_queue=TELEMETRY id={item.id}")
+
+
+def create_incident_or_queue(
+    client: GuardianAPIClient,
+    outbox: PersistentOutbox,
+    device_id: str,
+    payload: dict[str, object],
+) -> dict[str, object] | None:
+    try:
+        return client.create_incident(payload)
+    except GuardianAPIError:
+        item = outbox.enqueue("INCIDENT", device_id, payload)
+        print(f"offline_queue=INCIDENT id={item.id}")
+        return None
 
 
 def load_fixture(path: Path) -> tuple[Observation, str]:
@@ -224,6 +266,7 @@ def run_observer(args: argparse.Namespace) -> int:
     settings = GuardianSettings.from_env()
     client = GuardianAPIClient(args.api_url)
     state_store = AgentStateStore(args.runtime_state_path)
+    outbox = PersistentOutbox(args.outbox_path)
     runtime_state = state_store.load()
     observer = MacOSObserver(
         change_threshold=args.change_threshold,
@@ -240,6 +283,9 @@ def run_observer(args: argparse.Namespace) -> int:
 
     while args.max_cycles == 0 or cycle < args.max_cycles:
         cycle += 1
+        delivered = flush_offline_outbox(outbox, client)
+        if delivered:
+            print(f"offline_queue_flushed={delivered}")
         with EphemeralCapture.create() as capture:
             captured = observer.capture_if_changed(capture.path)
             if captured is None:
@@ -266,37 +312,46 @@ def run_observer(args: argparse.Namespace) -> int:
                     settings=settings,
                     fixture_input=False,
                 )
-                client.record_telemetry(
+                telemetry = TelemetryUpdate(
+                    child_id=args.child_id,
+                    screen_changes=1,
+                    suspicious_events=1 if assessment.risk != "SAFE" else 0,
+                    app_name=application,
+                ).model_dump(mode="json")
+                record_telemetry_or_queue(
+                    client,
+                    outbox,
                     args.device_id,
-                    TelemetryUpdate(
-                        child_id=args.child_id,
-                        screen_changes=1,
-                        suspicious_events=1 if assessment.risk != "SAFE" else 0,
-                        app_name=application,
-                    ).model_dump(mode="json"),
+                    telemetry,
                 )
                 print(
                     f"source=OPENAI risk={assessment.risk} category={assessment.category} "
                     f"confidence={assessment.confidence:.2f} decision={decision.action}"
                 )
                 if decision.action != "IGNORE":
-                    incident = client.create_incident(
-                        IncidentCreate(
-                            child_id=args.child_id,
-                            device_id=args.device_id,
-                            application=application,
-                            occurred_at=observation.timestamp,
-                            assessment=assessment,
-                            decision=decision,
-                            deduplication_key=hashlib.sha256(
-                                f"{args.device_id}|{application}|{screen_hash}".encode()
-                            ).hexdigest(),
-                        ).model_dump(mode="json")
+                    incident_payload = IncidentCreate(
+                        child_id=args.child_id,
+                        device_id=args.device_id,
+                        application=application,
+                        occurred_at=observation.timestamp,
+                        assessment=assessment,
+                        decision=decision,
+                        deduplication_key=hashlib.sha256(
+                            f"{args.device_id}|{application}|{screen_hash}".encode()
+                        ).hexdigest(),
+                    ).model_dump(mode="json")
+                    incident = create_incident_or_queue(
+                        client,
+                        outbox,
+                        args.device_id,
+                        incident_payload,
                     )
-                    client.upload_png_evidence(incident["id"], build_minimal_png(screenshot_path))
+                    if incident is not None:
+                        client.upload_png_evidence(str(incident["id"]), build_minimal_png(screenshot_path))
                     if decision.action == "BLOCK":
                         enforcer.block(application)
-                    print(f"incident={incident['id']} status={incident['status']}")
+                    if incident is not None:
+                        print(f"incident={incident['id']} status={incident['status']}")
                 next_interval = schedule.report_observation(changed=True)
 
         if args.max_cycles and cycle >= args.max_cycles:
@@ -388,6 +443,11 @@ def build_parser() -> argparse.ArgumentParser:
         "--runtime-state-path",
         type=Path,
         default=PROJECT_ROOT / ".data" / "runtime-state.json",
+    )
+    observe.add_argument(
+        "--outbox-path",
+        type=Path,
+        default=PROJECT_ROOT / ".data" / "outbox.json",
     )
     observe.add_argument("--openai-timeout", type=float, default=20)
     observe.add_argument("--minimum-interval", type=float, default=10)
