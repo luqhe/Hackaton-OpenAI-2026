@@ -17,6 +17,10 @@ dev = [
   "pytest>=8.3,<9",
   "ruff>=0.12,<1",
 ]
+managed = [
+  "boto3>=1.40,<2",
+  "psycopg[binary,pool]>=3.2,<4",
+]
 
 [tool.setuptools.packages.find]
 include = ["agent*", "api*", "guardian_core*", "risk_engine*"]
