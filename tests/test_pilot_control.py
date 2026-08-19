@@ -4,6 +4,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
 
 from guardian_core.pilot import PilotMode, load_pilot_rollout
 from guardian_core.pilot_control import PilotChangeAction, PilotConfigStore, pilot_config_digest
@@ -94,3 +95,62 @@ def test_tampered_snapshot_fails_digest_validation(tmp_path: Path) -> None:
         )
 
     assert pilot_config_digest(replacement) != change.active_digest
+
+
+def test_invalid_audit_fields_do_not_mutate_active_state(tmp_path: Path) -> None:
+    store = PilotConfigStore(tmp_path / "pilot-state")
+    baseline = load_pilot_rollout(BASELINE_PATH)
+    initial = store.activate(
+        baseline,
+        actor_subject_digest=ACTOR_DIGEST,
+        change_reference="PILOT-200",
+        changed_at=NOW,
+    )
+    active_before = store.active_path.read_bytes()
+    audit_before = store.audit_path.read_bytes()
+
+    with pytest.raises(ValidationError):
+        store.activate(
+            baseline.model_copy(update={"rollout_id": "invalid-actor-change"}),
+            actor_subject_digest="not-a-digest",
+            change_reference="PILOT-201",
+            changed_at=NOW,
+        )
+
+    assert store.active_path.read_bytes() == active_before
+    assert store.audit_path.read_bytes() == audit_before
+    assert store.changes() == [initial]
+
+
+def test_partial_write_failure_restores_snapshot_audit_and_active(monkeypatch, tmp_path: Path) -> None:
+    store = PilotConfigStore(tmp_path / "pilot-state")
+    baseline = load_pilot_rollout(BASELINE_PATH)
+    store.activate(
+        baseline,
+        actor_subject_digest=ACTOR_DIGEST,
+        change_reference="PILOT-202",
+        changed_at=NOW,
+    )
+    active_before = store.active_path.read_bytes()
+    audit_before = store.audit_path.read_bytes()
+    promoted = baseline.model_copy(update={"rollout_id": "promotion-that-fails"})
+    promoted_snapshot = store.snapshot_directory / f"{pilot_config_digest(promoted)}.json"
+    original_write = store._atomic_write
+
+    def fail_active(path: Path, content: str) -> None:
+        if path == store.active_path:
+            raise OSError("simulated active write failure")
+        original_write(path, content)
+
+    monkeypatch.setattr(store, "_atomic_write", fail_active)
+    with pytest.raises(OSError, match="simulated"):
+        store.activate(
+            promoted,
+            actor_subject_digest=ACTOR_DIGEST,
+            change_reference="PILOT-203",
+            changed_at=NOW,
+        )
+
+    assert store.active_path.read_bytes() == active_before
+    assert store.audit_path.read_bytes() == audit_before
+    assert not promoted_snapshot.exists()

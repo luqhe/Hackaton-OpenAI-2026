@@ -135,16 +135,8 @@ class PilotConfigStore:
         previous = self.current()
         previous_digest = pilot_config_digest(previous) if previous else None
         active_digest = pilot_config_digest(config)
-        self.snapshot_directory.mkdir(parents=True, exist_ok=True)
         snapshot_path = self.snapshot_directory / f"{active_digest}.json"
         serialized = pilot_config_json(config)
-        if snapshot_path.exists():
-            existing = load_pilot_rollout(snapshot_path)
-            if pilot_config_digest(existing) != active_digest:
-                raise ValueError("Existing pilot snapshot is corrupt")
-        else:
-            self._atomic_write(snapshot_path, serialized)
-        self._atomic_write(self.active_path, serialized)
         change = PilotConfigChange(
             action=action,
             previous_digest=previous_digest,
@@ -153,13 +145,44 @@ class PilotConfigStore:
             change_reference=change_reference,
             changed_at=changed_at,
         )
-        with self.audit_path.open("a", encoding="utf-8") as stream:
-            stream.write(change.model_dump_json() + "\n")
+        existing_changes = self.changes()
+        audit_content = "".join(item.model_dump_json() + "\n" for item in (*existing_changes, change))
+        updates: list[tuple[Path, str]] = []
+        if snapshot_path.exists():
+            existing = load_pilot_rollout(snapshot_path)
+            if pilot_config_digest(existing) != active_digest:
+                raise ValueError("Existing pilot snapshot is corrupt")
+        else:
+            updates.append((snapshot_path, serialized))
+        updates.extend(((self.audit_path, audit_content), (self.active_path, serialized)))
+        self._apply_transaction(updates)
         return change
+
+    def _apply_transaction(self, updates: list[tuple[Path, str]]) -> None:
+        originals = {path: path.read_bytes() if path.exists() else None for path, _ in updates}
+        changed: list[Path] = []
+        try:
+            for path, content in updates:
+                self._atomic_write(path, content)
+                changed.append(path)
+        except Exception:
+            for path in reversed(changed):
+                self._restore(path, originals[path])
+            raise
 
     @staticmethod
     def _atomic_write(path: Path, content: str) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         temporary = path.with_suffix(f"{path.suffix}.tmp")
         temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+
+    @staticmethod
+    def _restore(path: Path, original: bytes | None) -> None:
+        if original is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f"{path.suffix}.restore.tmp")
+        temporary.write_bytes(original)
         temporary.replace(path)
