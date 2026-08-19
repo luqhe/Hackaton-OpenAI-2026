@@ -1,0 +1,38 @@
+{
+  "schema_version": 1,
+  "roadmap_id": "R5-05",
+  "content_fields_forbidden": [
+    "visible_text",
+    "ocr",
+    "screenshot",
+    "transcript",
+    "child_explanation",
+    "evidence"
+  ],
+  "onboarding_stages": [
+    "STARTED",
+    "PRIVACY_REVIEWED",
+    "CONSENT_RECORDED",
+    "CHILD_PROFILE_CONFIGURED",
+    "DEVICE_PAIRED",
+    "PERMISSIONS_GRANTED",
+    "FIRST_HEALTHY_HEARTBEAT",
+    "SHADOW_READY"
+  ],
+  "agent_health_fields": [
+    "agent_version",
+    "screen_recording_permission",
+    "accessibility_permission",
+    "observer_healthy",
+    "offline_queue_depth",
+    "protection_status",
+    "observed_at",
+    "received_at"
+  ],
+  "command_latency": {
+    "start": "device_commands.created_at",
+    "end": "device_commands.acknowledged_at",
+    "unit": "milliseconds",
+    "slo_p95_ms": 5000
+  }
+}

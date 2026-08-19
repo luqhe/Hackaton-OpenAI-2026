@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "roadmap_id": "R5-03",
+  "curriculum_version": "2026-08-19.1",
+  "training_complete": false,
+  "valid_for_days": 90,
+  "passing_score_percent": 85,
+  "required_modules": [
+    "SUPPORT-01-PILOT-BOUNDARIES",
+    "SUPPORT-02-PRIVACY-SAFE-INTAKE",
+    "SUPPORT-03-AGENT-HEALTH-AND-OFFLINE",
+    "SUPPORT-04-INCORRECT-CLASSIFICATION",
+    "SUPPORT-05-UNEXPECTED-BLOCK-AND-KILL-SWITCH",
+    "SUPPORT-06-PRIVACY-INCIDENT-AND-DELETION"
+  ],
+  "must_pass_scenarios": [
+    "NO_CONTENT_IN_TICKETS",
+    "SEV0_CROSS_FAMILY_ESCALATION",
+    "FAIL_OPEN_NEW_BLOCKS",
+    "UNLOCK_PRIORITY",
+    "VERIFIED_DELETION_HANDOFF"
+  ],
+  "completions": []
+}
