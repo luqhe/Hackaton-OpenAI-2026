@@ -20,6 +20,7 @@ class OutboxItem:
     device_id: str
     payload: dict[str, Any]
     created_at: str
+    credential_id: str | None = None
     attempts: int = 0
 
 
@@ -41,7 +42,14 @@ class PersistentOutbox:
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
-    def enqueue(self, kind: OutboxKind, device_id: str, payload: dict[str, Any]) -> OutboxItem:
+    def enqueue(
+        self,
+        kind: OutboxKind,
+        device_id: str,
+        payload: dict[str, Any],
+        *,
+        credential_id: str | None = None,
+    ) -> OutboxItem:
         queued = list(self.items())
         if len(queued) >= self.maximum_items:
             raise RuntimeError("offline outbox capacity reached")
@@ -51,6 +59,7 @@ class PersistentOutbox:
             device_id=device_id,
             payload=payload,
             created_at=datetime.now(UTC).isoformat(),
+            credential_id=credential_id,
         )
         queued.append(item)
         self._save(queued)

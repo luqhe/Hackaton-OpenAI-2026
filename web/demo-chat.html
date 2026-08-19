@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Conversa sintética e controlada para a demonstração local do Guardian."
+      content="Conversa simulada para revisar sinais de segurança no Guardian."
     />
     <meta name="theme-color" content="#102f28" />
-    <title>Guardian · Demo Chat</title>
+    <title>Guardian · Conversa simulada</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <link rel="stylesheet" href="/static/demo-chat.css" />
     <script src="/static/demo-chat.js" defer></script>
@@ -22,7 +22,7 @@
         </a>
         <div class="demo-mode">
           <span aria-hidden="true"></span>
-          Cenário sintético · local
+          Conversa simulada · local
         </div>
       </header>
 
@@ -69,20 +69,20 @@
 
           <footer class="chat-controls">
             <button class="demo-button secondary" id="reset-demo" type="button">
-              Reset
+              Reiniciar
             </button>
             <p class="keyboard-hint">
               <kbd>→</kbd> ou <kbd>Espaço</kbd> para avançar
             </p>
             <button class="demo-button primary" id="reveal-next" type="button">
-              Revelar pedido 1
+              Mostrar mensagem 1
               <span aria-hidden="true">→</span>
             </button>
           </footer>
         </section>
 
         <aside class="presenter-panel" aria-labelledby="capture-title">
-          <p class="eyebrow">CONTROLE DO APRESENTADOR</p>
+          <p class="eyebrow">ANÁLISE DO CENÁRIO</p>
           <div
             class="capture-state"
             id="capture-state"
@@ -91,13 +91,12 @@
           >
             <span class="capture-icon" aria-hidden="true">✓</span>
             <div>
-              <h2 id="capture-title">Cena segura</h2>
-              <p>Pronta para captura</p>
+              <h2 id="capture-title">Sem sinais de risco</h2>
+              <p>0 de 4 sinais identificados</p>
             </div>
           </div>
           <p class="presenter-copy" id="presenter-copy">
-            A conversa começa sem sinais de risco. Revele os pedidos um por vez
-            para mostrar a progressão.
+            Os sinais aparecem conforme a conversa simulada avança.
           </p>
           <ol
             class="signal-progress"

@@ -25,6 +25,26 @@ const policyDescriptions = {
   OTHER: "Sinais ainda não classificados",
 };
 
+const categoryExplanations = {
+  DANGEROUS_CONTACT:
+    "A conversa reuniu pedidos de idade, escola, perfil social, fotos ou localização. Em conjunto, esses pedidos podem indicar uma tentativa de obter informações pessoais.",
+  ADULT_CONTENT:
+    "Foi identificado conteúdo sexual explícito que precisa ser revisado por um responsável.",
+  HATE_SPEECH:
+    "Foram identificadas mensagens com linguagem discriminatória ou desumanizante.",
+  OTHER:
+    "Foi identificado um sinal que precisa ser revisado por um responsável.",
+};
+
+const evidenceDescriptions = {
+  age: "Pedido de idade ao longo da conversa",
+  school: "Pedido do nome da escola",
+  social: "Pedido de perfil em rede social",
+  instagram: "Pedido de perfil em rede social",
+  photo: "Pedido de foto pessoal",
+  location: "Pedido de localização",
+};
+
 function escapeHtml(value) {
   return String(value ?? "")
     .replaceAll("&", "&amp;")
@@ -32,6 +52,23 @@ function escapeHtml(value) {
     .replaceAll(">", "&gt;")
     .replaceAll('"', "&quot;")
     .replaceAll("'", "&#039;");
+}
+
+function applicationName(value) {
+  return value === "Guardian Demo Chat" ? "Chat simulado" : value;
+}
+
+function explanationFor(incident) {
+  return categoryExplanations[incident.category] || incident.explanation;
+}
+
+function evidenceDescription(value) {
+  const text = String(value ?? "");
+  const key = text
+    .replace(/^Progressive request detected:\s*/i, "")
+    .trim()
+    .toLowerCase();
+  return evidenceDescriptions[key] || text;
 }
 
 async function api(path, options = {}) {
@@ -63,16 +100,19 @@ function setPage(title, eyebrow, route) {
   pageTitle.textContent = title;
   pageEyebrow.textContent = eyebrow;
   document.querySelectorAll(".nav a").forEach((link) => {
-    link.classList.toggle("active", link.dataset.route === route);
+    const isActive = link.dataset.route === route;
+    link.classList.toggle("active", isActive);
+    if (isActive) link.setAttribute("aria-current", "page");
+    else link.removeAttribute("aria-current");
   });
 }
 
 function updateCapabilityStatus(capabilities) {
   const observationActive = capabilities.real_screen_observation;
-  protectionStatus.classList.toggle("demo", !observationActive);
+  protectionStatus.classList.toggle("simulated", !observationActive);
   protectionLabel.textContent = observationActive
     ? "Proteção ativa"
-    : "Demonstração local";
+    : "Dados simulados";
 }
 
 function formatDuration(totalSeconds) {
@@ -97,7 +137,7 @@ function incidentRow(incident) {
       <span class="risk-icon" aria-hidden="true">!</span>
       <div>
         <strong>${escapeHtml(labels[incident.category] || incident.category)}</strong>
-        <p>${escapeHtml(incident.application)} · ${formatDate(incident.occurred_at)}</p>
+        <p>${escapeHtml(applicationName(incident.application))} · ${formatDate(incident.occurred_at)}</p>
       </div>
       <span class="status ${incident.status.toLowerCase()}">${escapeHtml(labels[incident.status] || incident.status)}</span>
     </a>`;
@@ -112,13 +152,20 @@ async function dashboard() {
   ]);
   const latest = incidents.length
     ? incidents.slice(0, 5).map(incidentRow).join("")
-    : `<div class="empty"><div class="empty-mark">✓</div><h3>Nenhum incidente hoje</h3><p>${productCapabilities.real_screen_observation ? "O Guardian continuará analisando mudanças relevantes sem armazenar continuamente a tela." : "Execute uma fixture controlada para demonstrar a análise contextual local."}</p></div>`;
+    : `<div class="empty"><div class="empty-mark">✓</div><h3>Nenhum incidente hoje</h3><p>${productCapabilities.real_screen_observation ? "Nenhum evento de risco foi identificado até agora." : "Nenhum incidente foi registrado nesta simulação."}</p></div>`;
   const deviceStatus = productCapabilities.real_screen_observation
-    ? `<strong>● Protegido</strong><span>Observação real ativa</span>`
-    : `<strong>◌ Modo de demonstração</strong><span>Entrada por fixtures controladas</span>`;
+    ? `<strong>● Protegido</strong><span>Análise no dispositivo ativa</span>`
+    : `<strong>◌ Dados simulados</strong><span>Nenhuma tela real está sendo observada</span>`;
   const observationLabel = productCapabilities.real_screen_observation
     ? "Mudanças analisadas"
-    : "Observações da demo";
+    : "Eventos analisados";
+  const observationDetail = productCapabilities.real_screen_observation
+    ? "Mudanças relevantes processadas no dispositivo"
+    : "Dados recebidos nesta sessão";
+  const interventionDetail =
+    report.interventions === 1
+      ? "1 intervenção realizada"
+      : `${report.interventions} intervenções realizadas`;
   app.innerHTML = `
     <div class="card profile-strip">
       <div class="avatar">L</div>
@@ -127,9 +174,9 @@ async function dashboard() {
     </div>
     <div class="section-heading"><h2>Hoje</h2><span></span></div>
     <div class="grid metrics">
-      <div class="card metric"><span class="metric-label">Tempo de tela</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Uso agregado no dispositivo</span></div>
-      <div class="card metric"><span class="metric-label">Incidentes de segurança</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">${report.interventions} intervenções realizadas</span></div>
-      <div class="card metric"><span class="metric-label">${observationLabel}</span><strong class="metric-value">${report.screen_changes}</strong><span class="metric-detail">Fixtures e telemetria local do MVP</span></div>
+      <div class="card metric" data-tone="calm"><span class="metric-label">Tempo de tela</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Uso agregado no dispositivo</span></div>
+      <div class="card metric" data-tone="attention"><span class="metric-label">Incidentes de segurança</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">${interventionDetail}</span></div>
+      <div class="card metric" data-tone="info"><span class="metric-label">${observationLabel}</span><strong class="metric-value">${report.screen_changes}</strong><span class="metric-detail">${observationDetail}</span></div>
     </div>
     <div class="grid two">
       <div>
@@ -139,10 +186,9 @@ async function dashboard() {
       <div>
         <div class="section-heading"><h2>Como o Guardian decide</h2></div>
         <div class="card insight">
-          <p class="eyebrow">CONTEXTO, NÃO PALAVRAS ISOLADAS</p>
-          <h2>Arquitetura preparada para entender contexto.</h2>
-          <p>Demo atual: fixture + texto + histórico recente + política familiar. Captura e OCR reais são a próxima etapa.</p>
-          <div class="signal-row" aria-label="Quatro sinais contextuais ativos"><span class="on"></span><span class="on"></span><span class="on"></span><span></span></div>
+          <p class="eyebrow">ANÁLISE DE INCIDENTES</p>
+          <h2>O contexto vem antes da intervenção.</h2>
+          <p>O Guardian considera a conversa recente e as regras definidas pela família. Nesta sessão, os dados são simulados e nenhuma tela real está sendo observada.</p>
         </div>
       </div>
     </div>`;
@@ -159,38 +205,39 @@ async function incidentDetail(id) {
         <div><p class="eyebrow">INCIDENTE DE ALTA PRIORIDADE</p><h2>${escapeHtml(labels[incident.category] || incident.category)}</h2></div>
         <span class="status ${incident.status.toLowerCase()}">${escapeHtml(labels[incident.status] || incident.status)}</span>
       </div>
-      <p class="lead">${escapeHtml(incident.explanation)}</p>
+      <p class="lead">${escapeHtml(explanationFor(incident))}</p>
       <div class="facts">
-        <div class="fact"><span>Aplicativo</span><strong>${escapeHtml(incident.application)}</strong></div>
+        <div class="fact"><span>Aplicativo</span><strong>${escapeHtml(applicationName(incident.application))}</strong></div>
         <div class="fact"><span>Direção</span><strong>${incident.direction === "CHILD_AS_TARGET" ? "Lucas como alvo" : escapeHtml(incident.direction)}</strong></div>
         <div class="fact"><span>Confiança</span><strong>${Math.round(incident.confidence * 100)}%</strong></div>
         <div class="fact"><span>Horário</span><strong>${formatDate(incident.occurred_at)}</strong></div>
       </div>
     </article>
-    <div class="grid two">
-      <section>
+    <div class="incident-review-grid">
+      <section class="signals-panel">
         <div class="section-heading"><h2>Sinais relevantes</h2></div>
         <div class="card card-pad">
-          <ul class="evidence-list">${incident.evidence.map((item) => `<li>${escapeHtml(item)}</li>`).join("")}</ul>
+          <ul class="evidence-list">${incident.evidence.map((item) => `<li>${escapeHtml(evidenceDescription(item))}</li>`).join("")}</ul>
         </div>
-        ${incident.screenshot_urls.length ? `<div class="section-heading"><h2>Evidência selecionada</h2></div><div class="card card-pad">${incident.screenshot_urls.map((url, index) => `<iframe class="evidence-frame" src="${escapeHtml(url)}" title="Evidência ${index + 1}" sandbox></iframe>`).join("")}</div>` : ""}
       </section>
-      <aside>
+      <aside class="decision-column">
         <div class="section-heading"><h2>Decisão da família</h2></div>
-        <div class="card card-pad">
+        <div class="card card-pad decision-panel" role="region" aria-label="Decisão da família">
           ${incident.child_explanation ? `<p class="eyebrow">EXPLICAÇÃO DE LUCAS</p><p>${escapeHtml(incident.child_explanation)}</p>` : `<p class="lead">Lucas ainda não enviou uma explicação para este bloqueio.</p>`}
+          <p class="decision-hint">Revise os sinais antes de enviar uma decisão ao dispositivo.</p>
           <div class="action-bar">
-            <button class="button primary" id="unlock" ${canDecide ? "" : "disabled"}>Desbloquear aplicativo</button>
-            <button class="button danger" id="keep" ${canDecide ? "" : "disabled"}>Manter bloqueado</button>
+            <button class="button secondary" id="unlock" ${canDecide ? "" : "disabled"}>Desbloquear aplicativo</button>
+            <button class="button danger-solid" id="keep" ${canDecide ? "" : "disabled"}>Manter bloqueado</button>
           </div>
         </div>
       </aside>
+      ${incident.screenshot_urls.length ? `<section class="evidence-panel"><div class="section-heading"><h2>Evidência selecionada</h2><span>Evidência mínima</span></div><div class="card card-pad">${incident.screenshot_urls.map((url, index) => `<iframe class="evidence-frame" src="${escapeHtml(url)}" title="Evidência ${index + 1}" loading="lazy" sandbox></iframe>`).join("")}</div></section>` : ""}
     </div>`;
   document.querySelector("#unlock")?.addEventListener("click", async () => {
     await api(`/incidents/${encodeURIComponent(id)}/unlock`, {
       method: "POST",
     });
-    notify("Comando de desbloqueio enviado ao dispositivo.");
+    notify("Solicitação de desbloqueio enviada.");
     await incidentDetail(id);
   });
   document.querySelector("#keep")?.addEventListener("click", async () => {
@@ -211,10 +258,12 @@ async function childPage() {
   if (incidentId) {
     const incident = await api(`/incidents/${encodeURIComponent(incidentId)}`);
     warning = `
-      <section class="card child-warning">
-        <p class="eyebrow">INTERVENÇÃO DO GUARDIAN</p>
-        <h2>${escapeHtml(incident.application)} foi temporariamente bloqueado.</h2>
-        <p>${escapeHtml(incident.explanation)} Não compartilhe escola, endereço, fotos privadas ou outros dados pessoais com quem você não conhece.</p>
+      <section class="card child-warning" role="alert">
+        <div class="warning-heading">
+          <span class="warning-icon" aria-hidden="true">!</span>
+          <div><p class="eyebrow">AVISO DE SEGURANÇA</p><h2>${escapeHtml(applicationName(incident.application))} foi temporariamente bloqueado.</h2></div>
+        </div>
+        <p>${escapeHtml(explanationFor(incident))} Não compartilhe escola, endereço, fotos privadas ou outros dados pessoais com quem você não conhece.</p>
         ${
           ["BLOCKED", "UNLOCK_REQUESTED"].includes(incident.status)
             ? `
@@ -232,22 +281,22 @@ async function childPage() {
     ${warning}
     <div class="section-heading"><h2>Seu dia digital</h2></div>
     <div class="grid metrics">
-      <div class="card metric"><span class="metric-label">Uso do dispositivo</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Sem julgamento de produtividade</span></div>
-      <div class="card metric"><span class="metric-label">Incidentes</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">Eventos compartilhados com seu responsável</span></div>
-      <div class="card metric"><span class="metric-label">Evidências compartilhadas</span><strong class="metric-value">${report.evidence_count}</strong><span class="metric-detail">Somente evidência mínima de incidente</span></div>
+      <div class="card metric" data-tone="calm"><span class="metric-label">Uso do dispositivo</span><strong class="metric-value">${formatDuration(report.total_seconds)}</strong><span class="metric-detail">Tempo total registrado nos aplicativos</span></div>
+      <div class="card metric" data-tone="attention"><span class="metric-label">Incidentes</span><strong class="metric-value">${report.incident_count}</strong><span class="metric-detail">Eventos compartilhados com seu responsável</span></div>
+      <div class="card metric" data-tone="info"><span class="metric-label">Evidências compartilhadas</span><strong class="metric-value">${report.evidence_count}</strong><span class="metric-detail">Somente evidência mínima de incidente</span></div>
     </div>
     <div class="grid two">
       <section>
         <div class="section-heading"><h2>Aplicativos hoje</h2></div>
         <div class="card card-pad">
-          <div class="usage-list">${report.apps.length ? report.apps.map((item) => `<div class="usage-row"><strong>${escapeHtml(item.app)}</strong><span class="bar"><span style="width:${Math.round((item.seconds / maxSeconds) * 100)}%"></span></span><span>${formatDuration(item.seconds)}</span></div>`).join("") : `<p class="lead">Nenhuma sessão de uso agregada ainda.</p>`}</div>
+          <div class="usage-list">${report.apps.length ? report.apps.map((item) => `<div class="usage-row"><strong>${escapeHtml(applicationName(item.app))}</strong><span class="bar"><span style="width:${Math.round((item.seconds / maxSeconds) * 100)}%"></span></span><span>${formatDuration(item.seconds)}</span></div>`).join("") : `<p class="lead">Nenhuma sessão de uso registrada hoje.</p>`}</div>
         </div>
       </section>
       <section>
-        <div class="section-heading"><h2>O que está visível</h2></div>
+        <div class="section-heading"><h2>Dados e privacidade</h2></div>
         <div class="card card-pad privacy-grid">
-          <div><h3>Ativo nesta versão</h3><ul class="check-list"><li>Fixtures controladas da demonstração</li><li>Texto fornecido pelas fixtures</li><li class="no">Captura da tela real — planejada</li><li class="no">OCR local — planejado</li><li class="no">Áudio do sistema — não implementado</li><li class="no">Microfone — não coletado</li><li class="no">Câmera — não coletada</li></ul></div>
-          <div><h3>Seu responsável pode acessar</h3><ul class="check-list"><li>Incidentes de segurança</li><li>Uso diário por aplicativo</li><li>Evidência mínima</li><li class="no">Tela ao vivo</li><li class="no">Microfone ou câmera</li></ul></div>
+          <div><h3>Dados usados nesta sessão</h3><ul class="check-list"><li>Mensagens da conversa simulada</li><li>Histórico recente exibido no cenário</li><li class="no">Tela do dispositivo — não acessada</li><li class="no">Texto de outros aplicativos — não acessado</li><li class="no">Áudio do sistema — não acessado</li><li class="no">Microfone — não acessado</li><li class="no">Câmera — não acessada</li></ul></div>
+          <div><h3>Seu responsável pode consultar</h3><ul class="check-list"><li>Incidentes de segurança</li><li>Uso diário por aplicativo</li><li>Evidência mínima do incidente</li><li class="no">Conteúdo completo da tela</li><li class="no">Microfone ou câmera</li></ul></div>
         </div>
       </section>
     </div>`;
@@ -269,8 +318,12 @@ async function settingsPage() {
   setPage("Políticas de proteção", "REGRAS DA FAMÍLIA", "settings");
   const rules = await api("/children/child-demo/policy");
   app.innerHTML = `
+    <div class="info-banner" role="note">
+      <span class="info-icon" aria-hidden="true">i</span>
+      <div><strong>Como as regras são aplicadas</strong><p>A análise indica a categoria; a regra salva abaixo define a ação no dispositivo.</p></div>
+    </div>
     <div class="card card-pad">
-      <p class="lead">Defina como o Guardian deve agir quando identifica um risco com confiança alta. A classificação nunca controla o dispositivo diretamente; estas regras determinísticas tomam a decisão.</p>
+      <p class="lead">Escolha o que deve acontecer quando um incidente é associado a cada categoria.</p>
       <div class="section-heading"><h2>Categorias</h2></div>
       <form id="policy-form">
         <div class="policy-list">${rules
@@ -317,7 +370,18 @@ async function route() {
   return dashboard();
 }
 
-route().catch((error) => {
+function renderError(error) {
   console.error(error);
-  app.innerHTML = `<div class="error-card">${escapeHtml(error.message)} Verifique se a API local está em execução.</div>`;
-});
+  app.innerHTML = `
+    <div class="error-card" role="alert">
+      <span class="error-icon" aria-hidden="true">!</span>
+      <div><h2>Não foi possível carregar esta tela</h2><p>O serviço do Guardian não respondeu. Tente novamente em instantes.</p></div>
+      <button class="button secondary" id="retry-page" type="button">Tentar novamente</button>
+    </div>`;
+  document.querySelector("#retry-page")?.addEventListener("click", () => {
+    app.innerHTML = `<div class="loading-card"><span class="spinner" aria-hidden="true"></span> Carregando proteção…</div>`;
+    route().catch(renderError);
+  });
+}
+
+route().catch(renderError);

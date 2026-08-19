@@ -5,10 +5,10 @@
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <meta
       name="description"
-      content="Guardian — proteção contextual e letramento digital para famílias."
+      content="Guardian — acompanhamento de segurança digital para famílias."
     />
     <meta name="theme-color" content="#143b32" />
-    <title>Guardian · Family Safety</title>
+    <title>Guardian · Proteção familiar</title>
     <link rel="stylesheet" href="/static/styles.css" />
     <script src="/static/app.js" defer></script>
   </head>
@@ -20,15 +20,29 @@
           <span>Guardian</span>
         </a>
         <nav class="nav" aria-label="Navegação principal">
-          <a href="/" data-route="dashboard"
-            ><span aria-hidden="true">⌂</span> Visão geral</a
-          >
-          <a href="/child" data-route="child"
-            ><span aria-hidden="true">◉</span> Lucas</a
-          >
-          <a href="/settings" data-route="settings"
-            ><span aria-hidden="true">⚙</span> Políticas</a
-          >
+          <a href="/" data-route="dashboard">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path d="M3 10.8 12 3l9 7.8" />
+              <path d="M5.5 9.5V21h13V9.5M9.5 21v-6h5v6" />
+            </svg>
+            <span class="nav-label">Visão geral</span>
+          </a>
+          <a href="/child" data-route="child">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="8" r="3.5" />
+              <path d="M5.5 20c.7-4 3-6 6.5-6s5.8 2 6.5 6" />
+            </svg>
+            <span class="nav-label">Lucas</span>
+          </a>
+          <a href="/settings" data-route="settings">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <path
+                d="M12 3.5 19 6v5.2c0 4.5-2.7 7.8-7 9.3-4.3-1.5-7-4.8-7-9.3V6l7-2.5Z"
+              />
+              <path d="M9 11.5h6M10.5 8.5h3M10.5 14.5h3" />
+            </svg>
+            <span class="nav-label">Políticas</span>
+          </a>
         </nav>
         <div class="sidebar-foot">
           <div class="mini-avatar" aria-hidden="true">MF</div>
@@ -42,7 +56,12 @@
             <p class="eyebrow" id="page-eyebrow">FAMÍLIA FERREIRA</p>
             <h1 id="page-title">Visão geral</h1>
           </div>
-          <div class="protection-pill demo" id="protection-status">
+          <div
+            class="protection-pill simulated"
+            id="protection-status"
+            role="status"
+            aria-live="polite"
+          >
             <span class="protection-dot" aria-hidden="true"></span>
             <span class="protection-label">Verificando modo…</span>
           </div>
@@ -53,6 +72,7 @@
           class="toast"
           role="status"
           aria-live="polite"
+          aria-atomic="true"
           hidden
         ></div>
         <section id="app" aria-live="polite">
