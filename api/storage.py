@@ -49,6 +49,7 @@ from guardian_core.models import (
     RiskLevel,
     TelemetryUpdate,
 )
+from guardian_core.pilot import PilotTechnicalTelemetry
 from guardian_core.version import SCHEMA_VERSION
 
 HEARTBEAT_STALE_AFTER = timedelta(minutes=2)
@@ -283,6 +284,16 @@ CREATE TABLE IF NOT EXISTS family_deletion_receipts (
     staging_directory TEXT,
     requested_at TEXT NOT NULL,
     completed_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS pilot_technical_telemetry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    family_id TEXT NOT NULL,
+    device_id TEXT NOT NULL,
+    observed_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL,
+    FOREIGN KEY (family_id, device_id)
+        REFERENCES devices(family_id, id) ON DELETE CASCADE
 );
 """
 
@@ -1803,7 +1814,7 @@ class GuardianStore:
         index = max(0, min(len(ordered) - 1, int((len(ordered) * percentile) + 0.999999) - 1))
         return round(ordered[index], 3)
 
-    def pilot_metrics(self, since_hours: int) -> PilotMetricsReport:
+    def pilot_metrics(self, since_hours: int, *, family_id: str | None = None) -> PilotMetricsReport:
         generated_at = datetime.now(UTC)
         window_started_at = generated_at - timedelta(hours=since_hours)
         window_start = window_started_at.isoformat()
@@ -1813,37 +1824,41 @@ class GuardianStore:
                 SELECT stage, COUNT(*) AS event_count,
                        COUNT(DISTINCT session_id) AS unique_sessions
                 FROM pilot_onboarding_events
-                WHERE occurred_at >= ?
+                WHERE occurred_at >= ? AND (? IS NULL OR family_id = ?)
                 GROUP BY stage
                 """,
-                (window_start,),
+                (window_start, family_id, family_id),
             ).fetchall()
             health_rows = connection.execute(
                 """
                 SELECT device_id, protection_status, offline_queue_depth, observed_at
                 FROM agent_health_samples
-                WHERE received_at >= ?
+                WHERE received_at >= ? AND (? IS NULL OR family_id = ?)
                 ORDER BY received_at
                 """,
-                (window_start,),
+                (window_start, family_id, family_id),
             ).fetchall()
             command_rows = connection.execute(
                 """
                 SELECT created_at, acknowledged_at
                 FROM device_commands
                 WHERE acknowledged_at IS NOT NULL AND created_at >= ?
+                  AND (? IS NULL OR family_id = ?)
                 """,
-                (window_start,),
+                (window_start, family_id, family_id),
             ).fetchall()
             deletion_failures = connection.execute(
                 """
                 SELECT COUNT(*) AS total FROM family_deletion_receipts
                 WHERE requested_at >= ? AND status IN (?, ?)
+                  AND (? IS NULL OR family_reference_sha256 = ?)
                 """,
                 (
                     window_start,
                     FamilyDeletionStatus.FAILED_DATABASE,
                     FamilyDeletionStatus.FAILED_STORAGE_CLEANUP,
+                    family_id,
+                    self._family_reference(family_id) if family_id is not None else None,
                 ),
             ).fetchone()["total"]
 
@@ -2296,6 +2311,20 @@ class GuardianStore:
                     update.media_sessions,
                     update.suspicious_events,
                 ),
+            )
+
+    def record_pilot_telemetry(
+        self, family_id: str, device_id: str, update: PilotTechnicalTelemetry
+    ) -> None:
+        self.touch_device(family_id, device_id)
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO pilot_technical_telemetry(
+                    family_id, device_id, observed_at, payload_json
+                ) VALUES (?, ?, ?, ?)
+                """,
+                (family_id, device_id, _now_iso(), update.model_dump_json(exclude_none=True)),
             )
 
     def daily_report(self, family_id: str, child_id: str, report_date: date) -> DailyReport:

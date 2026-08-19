@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-OutboxKind = Literal["INCIDENT", "TELEMETRY"]
+from guardian_core.pilot import PilotTechnicalTelemetry
+
+OutboxKind = Literal["INCIDENT", "TELEMETRY", "PILOT_TELEMETRY"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -38,7 +40,18 @@ class PersistentOutbox:
             return ()
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            return tuple(OutboxItem(**item) for item in payload)
+            items: list[OutboxItem] = []
+            for raw_item in payload:
+                item = OutboxItem(**raw_item)
+                if item.kind not in {"INCIDENT", "TELEMETRY", "PILOT_TELEMETRY"}:
+                    raise ValueError("unsupported outbox kind")
+                if item.kind == "PILOT_TELEMETRY":
+                    validated = PilotTechnicalTelemetry.model_validate(item.payload).model_dump(
+                        mode="json", exclude_none=True
+                    )
+                    item = replace(item, payload=validated)
+                items.append(item)
+            return tuple(items)
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
@@ -50,6 +63,10 @@ class PersistentOutbox:
         *,
         credential_id: str | None = None,
     ) -> OutboxItem:
+        if kind == "PILOT_TELEMETRY":
+            payload = PilotTechnicalTelemetry.model_validate(payload).model_dump(
+                mode="json", exclude_none=True
+            )
         queued = list(self.items())
         if len(queued) >= self.maximum_items:
             raise RuntimeError("offline outbox capacity reached")
