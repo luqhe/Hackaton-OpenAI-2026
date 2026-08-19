@@ -141,7 +141,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 - [x] `R1-08` Substituir SHA-256 por perceptual hash ou diferença visual adequada.
 - [x] `R1-09` Ignorar telas estáticas e alterações irrelevantes.
 - [x] `R1-10` Implementar intervalo configurável e backoff por inatividade.
-- [ ] `R1-11` Construir context buffer por aplicativo e sessão.
+- [x] `R1-11` Construir context buffer por aplicativo e sessão.
 - [ ] `R1-12` Limitar o buffer a 1–2 minutos ou 5–10 observações significativas.
 - [ ] `R1-13` Excluir dados temporários seguros após análise.
 - [ ] `R1-14` Selecionar ou recortar somente a evidência mínima de incidente.
