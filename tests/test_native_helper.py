@@ -57,6 +57,8 @@ def test_native_helper_has_explicit_permission_onboarding() -> None:
     assert "CGPreflightScreenCaptureAccess" in source
     assert "CGRequestScreenCaptureAccess" in source
     assert "AXIsProcessTrustedWithOptions" in source
+    assert '"AXTrustedCheckOptionPrompt": true' in source
+    assert "kAXTrustedCheckOptionPrompt" not in source
     assert 'case "permissions"' in source
     assert 'arguments[2] == "--request"' in source
     assert "Gravação da Tela" in guide

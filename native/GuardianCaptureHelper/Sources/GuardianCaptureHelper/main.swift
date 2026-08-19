@@ -107,9 +107,7 @@ struct PermissionService {
             : CGPreflightScreenCaptureAccess()
         let accessibility: Bool
         if requestIfNeeded {
-            let options = [
-                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
-            ] as CFDictionary
+            let options = ["AXTrustedCheckOptionPrompt": true] as CFDictionary
             accessibility = AXIsProcessTrustedWithOptions(options)
         } else {
             accessibility = AXIsProcessTrusted()
