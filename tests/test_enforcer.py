@@ -24,6 +24,35 @@ def test_demo_enforcer_refuses_essential_application(tmp_path) -> None:
         enforcer.block("Finder")
 
 
+@pytest.mark.parametrize(
+    "application",
+    [
+        "finder",
+        "/System/Library/CoreServices/Finder.app",
+        "WINDOWSERVER",
+        "SystemUIServer.app",
+        "guardian-capture-helper",
+    ],
+)
+def test_protected_application_matching_is_normalized(tmp_path, application) -> None:
+    enforcer = DemoEnforcer(tmp_path / "state.json")
+
+    with pytest.raises(ValueError, match="protected application"):
+        enforcer.block(application)
+
+
+def test_protected_application_is_removed_from_restored_state(tmp_path) -> None:
+    state_path = tmp_path / "state.json"
+    state_path.write_text(
+        json.dumps({"blocked_apps": ["Finder.app", "Guardian Demo Chat"]}),
+        encoding="utf-8",
+    )
+
+    enforcer = DemoEnforcer(state_path)
+
+    assert enforcer.blocked_apps == {"Guardian Demo Chat"}
+
+
 def test_macos_enforcer_reapplies_quit_when_blocked_app_reopens(monkeypatch, tmp_path) -> None:
     monkeypatch.setattr(enforcer_module.platform, "system", lambda: "Darwin")
     running_states = iter(["true\n", "true\n"])
