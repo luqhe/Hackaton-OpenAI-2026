@@ -10,9 +10,11 @@
     <meta name="theme-color" content="#143b32" />
     <title>Guardian · Proteção familiar</title>
     <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/stage4-transparency.css" />
     <script src="/static/app.js" defer></script>
   </head>
   <body>
+    <a class="skip-link" href="#main-content">Ir para o conteúdo principal</a>
     <div class="shell">
       <aside class="sidebar">
         <a class="brand" href="/" aria-label="Guardian — início">
@@ -43,6 +45,25 @@
             </svg>
             <span class="nav-label">Políticas</span>
           </a>
+          <a href="/family" data-route="family">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="9" cy="8" r="3" />
+              <circle cx="17" cy="10" r="2.5" />
+              <path
+                d="M3.5 20c.6-4 2.5-6 5.5-6s4.9 2 5.5 6M14 15c3 0 5 1.7 5.5 5"
+              />
+            </svg>
+            <span class="nav-label">Família</span>
+          </a>
+          <a href="/support" data-route="support">
+            <svg class="nav-icon" viewBox="0 0 24 24" aria-hidden="true">
+              <circle cx="12" cy="12" r="9" />
+              <path
+                d="M9.7 9a2.5 2.5 0 1 1 3.3 2.4c-.7.3-1 1-1 1.8M12 17h.01"
+              />
+            </svg>
+            <span class="nav-label">Suporte</span>
+          </a>
         </nav>
         <div class="sidebar-foot">
           <div class="mini-avatar" aria-hidden="true">MF</div>
@@ -50,7 +71,7 @@
         </div>
       </aside>
 
-      <main class="main">
+      <main class="main" id="main-content" tabindex="-1">
         <header class="topbar">
           <div>
             <p class="eyebrow" id="page-eyebrow">FAMÍLIA FERREIRA</p>
