@@ -1,0 +1,41 @@
+{
+  "schema_version": "guardian.shadow-summary.v1",
+  "window_id": "synthetic-r3-baseline-v1",
+  "records": 13,
+  "reviewed_records": 13,
+  "local_model_disagreements": 0,
+  "model_policy_disagreements": 0,
+  "policy_human_disagreements": 0,
+  "false_positives": 0,
+  "false_negatives": 0,
+  "false_positive_rate": 0.0,
+  "false_negative_rate": 0.0,
+  "contestation_rate": 0.0,
+  "reversal_rate": 0.0,
+  "actual_interventions": 0,
+  "by_category": {
+    "ADULT_CONTENT": {
+      "records": 2,
+      "false_positives": 0,
+      "false_negatives": 0
+    },
+    "DANGEROUS_CONTACT": {
+      "records": 5,
+      "false_positives": 0,
+      "false_negatives": 0
+    },
+    "HATE_SPEECH": {
+      "records": 2,
+      "false_positives": 0,
+      "false_negatives": 0
+    },
+    "SAFE": {
+      "records": 4,
+      "false_positives": 0,
+      "false_negatives": 0
+    }
+  },
+  "by_model_version": {
+    "heuristic-context-v1": 13
+  }
+}

@@ -60,4 +60,3 @@ class ClassifierProvider(Protocol):
     descriptor: ProviderDescriptor
 
     def classify(self, context: ContextBundle, *, timeout: float) -> RiskAssessment: ...
-

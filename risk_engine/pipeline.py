@@ -108,7 +108,7 @@ class ContextualRiskPipeline:
                 try:
                     raw = self.remote_provider.classify(context, timeout=self.timeout_seconds)
                     remote = RiskAssessment.model_validate(raw)
-                except (ValidationError, TypeError, ValueError) as error:
+                except (ValidationError, TypeError, ValueError):
                     self.circuit_breaker.record_failure()
                     errors.append(ProviderInvalidOutputError.__name__)
                     break
@@ -154,4 +154,3 @@ class ContextualRiskPipeline:
             eligible_for_automatic_block=False,
             errors=tuple(errors),
         )
-

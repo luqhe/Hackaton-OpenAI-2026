@@ -56,7 +56,7 @@ def build_context(
     serialized = json.dumps(observed_data, ensure_ascii=False, separators=(",", ":"), sort_keys=True)
     untrusted_payload = (
         f"{UNTRUSTED_DATA_HEADER}\n"
-        "<GUARDIAN_UNTRUSTED_DATA encoding=\"json\">\n"
+        '<GUARDIAN_UNTRUSTED_DATA encoding="json">\n'
         f"{serialized}\n"
         "</GUARDIAN_UNTRUSTED_DATA>"
     )
@@ -69,4 +69,3 @@ def build_context(
         selected_frame_path=selected_frame_path,
         selected_frame_sha256=frame_sha256,
     )
-

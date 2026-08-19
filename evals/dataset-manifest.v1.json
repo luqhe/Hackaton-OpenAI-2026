@@ -1,0 +1,15 @@
+{
+  "schema_version": "guardian.dataset-manifest.v1",
+  "dataset_version": "guardian-synthetic-context-v1.0.0",
+  "file": "dataset-v1.jsonl",
+  "created_during_hackathon": true,
+  "source": "Original synthetic scenarios authored for Guardian; no scraped, personal or third-party data.",
+  "rights": "project-owned-synthetic",
+  "allowed_uses": ["development", "calibration", "evaluation", "demo"],
+  "prohibited_uses": ["claiming population-level safety performance", "training on real minors' data"],
+  "split_policy": {
+    "development": "May be inspected while changing rules or prompts.",
+    "calibration": "May be used only to fit confidence mapping and thresholds.",
+    "test": "Frozen final regression split; must not be used for tuning."
+  }
+}

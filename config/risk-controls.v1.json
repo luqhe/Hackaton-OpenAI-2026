@@ -1,0 +1,75 @@
+{
+  "schema_version": "guardian.risk-controls.v1",
+  "controls_version": "risk-controls.2026-08-19",
+  "categories": {
+    "DANGEROUS_CONTACT": {
+      "calibration": [
+        {"raw": 0.0, "calibrated": 0.0},
+        {"raw": 0.5, "calibrated": 0.42},
+        {"raw": 0.82, "calibrated": 0.78},
+        {"raw": 1.0, "calibrated": 0.98}
+      ],
+      "log_threshold": 0.4,
+      "alert_threshold": 0.7,
+      "block_threshold": 0.9
+    },
+    "ADULT_CONTENT": {
+      "calibration": [
+        {"raw": 0.0, "calibrated": 0.0},
+        {"raw": 0.5, "calibrated": 0.4},
+        {"raw": 0.85, "calibrated": 0.8},
+        {"raw": 1.0, "calibrated": 0.98}
+      ],
+      "log_threshold": 0.45,
+      "alert_threshold": 0.72,
+      "block_threshold": 0.92
+    },
+    "HATE_SPEECH": {
+      "calibration": [
+        {"raw": 0.0, "calibrated": 0.0},
+        {"raw": 0.5, "calibrated": 0.38},
+        {"raw": 0.85, "calibrated": 0.79},
+        {"raw": 1.0, "calibrated": 0.97}
+      ],
+      "log_threshold": 0.45,
+      "alert_threshold": 0.75,
+      "block_threshold": 0.93
+    },
+    "OTHER": {
+      "calibration": [
+        {"raw": 0.0, "calibrated": 0.0},
+        {"raw": 1.0, "calibrated": 0.5}
+      ],
+      "log_threshold": 0.2,
+      "alert_threshold": 0.8,
+      "block_threshold": 0.99
+    }
+  },
+  "kill_switches": [
+    {
+      "category": "DANGEROUS_CONTACT",
+      "model_version": "*",
+      "enabled": true,
+      "reason": "BLOCK remains disabled until a representative real shadow window is approved"
+    },
+    {
+      "category": "ADULT_CONTENT",
+      "model_version": "*",
+      "enabled": true,
+      "reason": "BLOCK remains disabled until a representative real shadow window is approved"
+    },
+    {
+      "category": "HATE_SPEECH",
+      "model_version": "*",
+      "enabled": true,
+      "reason": "BLOCK remains disabled until a representative real shadow window is approved"
+    },
+    {
+      "category": "OTHER",
+      "model_version": "*",
+      "enabled": true,
+      "reason": "OTHER is LOG-only until a specific evaluated category exists"
+    }
+  ],
+  "block_approvals": []
+}

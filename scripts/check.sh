@@ -4,6 +4,7 @@ project_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_root"
 
 .venv/bin/python scripts/validate_stage0.py
+.venv/bin/python scripts/run_r3_evals.py --check
 .venv/bin/python -m ruff check .
 .venv/bin/python -m ruff format --check agent api guardian_core risk_engine scripts tests
 .venv/bin/python -m pytest

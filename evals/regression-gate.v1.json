@@ -1,0 +1,15 @@
+{
+  "schema_version": "guardian.eval-gate.v1",
+  "gate_version": "guardian-risk-regression-v1.0.0",
+  "dataset_version": "guardian-synthetic-context-v1.0.0",
+  "split": "test",
+  "minimum_precision": 0.9,
+  "minimum_recall": 0.8,
+  "maximum_false_positive_rate": 0.1,
+  "maximum_invalid_output_rate": 0.005,
+  "minimum_category_precision": {
+    "DANGEROUS_CONTACT": 0.9,
+    "ADULT_CONTENT": 0.9,
+    "HATE_SPEECH": 0.9
+  }
+}

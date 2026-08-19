@@ -213,7 +213,11 @@ def assess_context(
         with transport(request, timeout=timeout) as response:
             response_payload = _read_response(response)
     except HTTPError as error:
-        error_type = OpenAITransientRiskError if error.code in {408, 409, 429} or error.code >= 500 else OpenAIRiskError
+        error_type = (
+            OpenAITransientRiskError
+            if error.code in {408, 409, 429} or error.code >= 500
+            else OpenAIRiskError
+        )
         raise error_type(f"OpenAI returned HTTP {error.code}") from error
     except TimeoutError as error:
         raise OpenAITransientRiskError("OpenAI request timed out") from error
