@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import ipaddress
 import json
+import os
 import secrets
 from collections.abc import Callable
 from datetime import UTC, datetime
@@ -28,7 +29,7 @@ class GuardianAPIClient:
         clock: Callable[[], datetime] = lambda: datetime.now(UTC),
         nonce_factory: Callable[[], str] = lambda: secrets.token_urlsafe(18),
         allow_insecure_localhost: bool = False,
-        demo_mode: bool = False,
+        demo_mode: bool | None = None,
     ):
         self.base_url = base_url.rstrip("/")
         self.timeout = timeout
@@ -36,7 +37,11 @@ class GuardianAPIClient:
         self.clock = clock
         self.nonce_factory = nonce_factory
         self.allow_insecure_localhost = allow_insecure_localhost
-        self.demo_mode = demo_mode
+        self.demo_mode = (
+            os.getenv("GUARDIAN_DEMO_MODE", "false").strip().lower() in {"1", "true", "yes", "on"}
+            if demo_mode is None
+            else demo_mode
+        )
         self._parsed_base_url = urlsplit(self.base_url)
         if credential is not None:
             self._require_secure_transport()
