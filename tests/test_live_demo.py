@@ -1,9 +1,11 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import agent.client as client_module
 import agent.main as agent_main
@@ -13,7 +15,9 @@ from guardian_core.config import Environment, GuardianSettings, LogLevel
 from guardian_core.models import RiskAssessment
 from risk_engine.openai import OpenAIRiskError
 
-PNG = b"\x89PNG\r\n\x1a\ncontrolled-demo"
+PNG_BUFFER = BytesIO()
+Image.new("RGB", (8, 8), color="white").save(PNG_BUFFER, format="PNG")
+PNG = PNG_BUFFER.getvalue()
 
 
 def development_settings(tmp_path: Path, environment: Environment = Environment.DEVELOPMENT):
@@ -178,7 +182,9 @@ def test_live_demo_captures_assesses_uploads_then_blocks(monkeypatch, tmp_path, 
     assert "parent_view=http://testserver/incidents/incident-live" in output
     assert events.index("incident") < events.index("upload") < events.index("block")
     assert enforcer.blocked == ["Guardian Demo Chat"]
-    assert client.uploads == [("incident-live", PNG)]
+    assert client.uploads[0][0] == "incident-live"
+    with Image.open(BytesIO(client.uploads[0][1])) as uploaded_image:
+        assert uploaded_image.size == (8, 8)
     assert client.incidents[0]["assessment"]["risk"] == "HIGH"
     assert "action" not in client.incidents[0]["assessment"]
     assert observer.screenshot_path is not None

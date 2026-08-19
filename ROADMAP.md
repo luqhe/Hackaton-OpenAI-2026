@@ -144,7 +144,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 - [x] `R1-11` Construir context buffer por aplicativo e sessão.
 - [x] `R1-12` Limitar o buffer a 1–2 minutos ou 5–10 observações significativas.
 - [x] `R1-13` Excluir dados temporários seguros após análise.
-- [ ] `R1-14` Selecionar ou recortar somente a evidência mínima de incidente.
+- [x] `R1-14` Selecionar ou recortar somente a evidência mínima de incidente.
 
 ## Épico 1.3 — Enforcement e ciclo de vida
 

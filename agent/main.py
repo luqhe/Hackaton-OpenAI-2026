@@ -10,7 +10,7 @@ from pathlib import Path
 
 from agent.client import GuardianAPIClient, GuardianAPIError
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
-from agent.evidence import EphemeralCapture
+from agent.evidence import EphemeralCapture, build_minimal_png
 from agent.observer import MacOSObserver
 from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
@@ -176,7 +176,7 @@ def run_live_demo(args: argparse.Namespace) -> int:
             ).hexdigest(),
         )
         incident = client.create_incident(incident_payload.model_dump(mode="json"))
-        client.upload_png_evidence(incident["id"], screenshot_path.read_bytes())
+        client.upload_png_evidence(incident["id"], build_minimal_png(screenshot_path))
         if decision.action == "BLOCK":
             enforcer.block(observation.app_name)
         temporary_capture.delete()
