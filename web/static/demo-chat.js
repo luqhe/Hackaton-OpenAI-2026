@@ -15,8 +15,8 @@ function updateDemoState() {
   requestCount.textContent = `${revealedRequests} de ${totalRequests} pedidos`;
   revealButton.disabled = isComplete;
   revealButton.innerHTML = isComplete
-    ? "Sequência completa"
-    : `Revelar pedido ${revealedRequests + 1} <span aria-hidden="true">→</span>`;
+    ? "Todas as mensagens exibidas"
+    : `Mostrar mensagem ${revealedRequests + 1} <span aria-hidden="true">→</span>`;
 
   document.querySelectorAll("[data-progress]").forEach((item) => {
     item.classList.toggle(
@@ -27,23 +27,25 @@ function updateDemoState() {
 
   if (isComplete) {
     captureState.classList.add("is-complete");
-    captureState.querySelector("h2").textContent = "Risco completo";
-    captureState.querySelector("p").textContent = "Pronto para captura";
+    captureState.querySelector("h2").textContent =
+      "Sinais de risco identificados";
+    captureState.querySelector("p").textContent = "4 de 4 sinais presentes";
     presenterCopy.textContent =
-      "Os quatro pedidos de informação pessoal estão visíveis. A cena está pronta para o fluxo local do Guardian.";
+      "A sequência reúne pedidos de idade, escola, perfil social e foto pessoal.";
   } else if (revealedRequests > 0) {
     captureState.classList.remove("is-complete");
     captureState.querySelector("h2").textContent =
-      `Pedido ${revealedRequests} revelado`;
-    captureState.querySelector("p").textContent = "Continue a progressão";
+      `Sinal ${revealedRequests} de ${totalRequests}`;
+    captureState.querySelector("p").textContent =
+      "Pedido de informação pessoal";
     presenterCopy.textContent =
-      "O pedido novo fica marcado na conversa. Avance até os quatro sinais estarem visíveis.";
+      "O novo pedido fica destacado. Continue para revisar o restante da conversa.";
   } else {
     captureState.classList.remove("is-complete");
-    captureState.querySelector("h2").textContent = "Cena segura";
-    captureState.querySelector("p").textContent = "Pronta para captura";
+    captureState.querySelector("h2").textContent = "Sem sinais de risco";
+    captureState.querySelector("p").textContent = "0 de 4 sinais identificados";
     presenterCopy.textContent =
-      "A conversa começa sem sinais de risco. Revele os pedidos um por vez para mostrar a progressão.";
+      "Os sinais aparecem conforme a conversa simulada avança.";
   }
 }
 
