@@ -7,12 +7,15 @@ import Vision
 
 enum CaptureError: LocalizedError {
     case displayUnavailable
+    case displaySleeping
     case pngEncodingFailed
 
     var errorDescription: String? {
         switch self {
         case .displayUnavailable:
             return "No capturable display is available."
+        case .displaySleeping:
+            return "The selected display is asleep; capture was skipped."
         case .pngEncodingFailed:
             return "The captured frame could not be encoded as PNG."
         }
@@ -20,13 +23,17 @@ enum CaptureError: LocalizedError {
 }
 
 struct ScreenCaptureService {
-    func capturePrimaryDisplay(to destination: URL) async throws {
+    func captureDisplay(to destination: URL, displayID requestedDisplayID: CGDirectDisplayID?) async throws {
         let content = try await SCShareableContent.excludingDesktopWindows(
             false,
             onScreenWindowsOnly: true
         )
-        guard let display = content.displays.first else {
+        let selectedDisplayID = requestedDisplayID ?? CGMainDisplayID()
+        guard let display = content.displays.first(where: { $0.displayID == selectedDisplayID }) else {
             throw CaptureError.displayUnavailable
+        }
+        guard CGDisplayIsOnline(display.displayID) != 0, CGDisplayIsAsleep(display.displayID) == 0 else {
+            throw CaptureError.displaySleeping
         }
 
         let configuration = SCStreamConfiguration()
@@ -52,6 +59,32 @@ struct ScreenCaptureService {
         )
         try png.write(to: destination, options: .atomic)
     }
+
+    func availableDisplays() async throws -> [DisplayDescriptor] {
+        let content = try await SCShareableContent.excludingDesktopWindows(
+            false,
+            onScreenWindowsOnly: true
+        )
+        return content.displays.map { display in
+            DisplayDescriptor(
+                id: display.displayID,
+                width: display.width,
+                height: display.height,
+                isMain: display.displayID == CGMainDisplayID(),
+                isOnline: CGDisplayIsOnline(display.displayID) != 0,
+                isAsleep: CGDisplayIsAsleep(display.displayID) != 0
+            )
+        }
+    }
+}
+
+struct DisplayDescriptor: Encodable {
+    let id: CGDirectDisplayID
+    let width: Int
+    let height: Int
+    let isMain: Bool
+    let isOnline: Bool
+    let isAsleep: Bool
 }
 
 struct ActiveWindow: Encodable {
@@ -119,14 +152,34 @@ struct GuardianCaptureHelper {
 
             switch arguments[1] {
             case "capture":
-                guard arguments.count == 3 else {
+                guard arguments.count == 3 || arguments.count == 5 else {
                     throw ValidationError(usage)
                 }
                 let destination = URL(fileURLWithPath: arguments[2]).standardizedFileURL
                 guard destination.pathExtension.lowercased() == "png" else {
                     throw ValidationError("Capture destination must use the .png extension.")
                 }
-                try await ScreenCaptureService().capturePrimaryDisplay(to: destination)
+                var displayID: CGDirectDisplayID?
+                if arguments.count == 5 {
+                    guard arguments[3] == "--display-id", let parsedID = UInt32(arguments[4]) else {
+                        throw ValidationError(usage)
+                    }
+                    displayID = parsedID
+                }
+                try await ScreenCaptureService().captureDisplay(
+                    to: destination,
+                    displayID: displayID
+                )
+            case "displays":
+                guard arguments.count == 2 else {
+                    throw ValidationError(usage)
+                }
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                let displays = try await ScreenCaptureService().availableDisplays()
+                let payload = try encoder.encode(displays)
+                FileHandle.standardOutput.write(payload)
+                FileHandle.standardOutput.write(Data("\n".utf8))
             case "active-window":
                 guard arguments.count == 2 else {
                     throw ValidationError(usage)
@@ -155,7 +208,8 @@ struct GuardianCaptureHelper {
 
     private static let usage = """
     Usage:
-      guardian-capture-helper capture /absolute/path/frame.png
+      guardian-capture-helper capture /absolute/path/frame.png [--display-id ID]
+      guardian-capture-helper displays
       guardian-capture-helper active-window
       guardian-capture-helper ocr /absolute/path/frame.png
     """

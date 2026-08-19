@@ -35,3 +35,16 @@ def test_native_helper_performs_local_vision_ocr() -> None:
     assert "request.usesLanguageCorrection = true" in source
     assert "VNImageRequestHandler" in source
     assert 'case "ocr"' in source
+
+
+def test_native_helper_handles_display_topology_and_sleep() -> None:
+    source = (HELPER_ROOT / "Sources" / "GuardianCaptureHelper" / "main.swift").read_text(encoding="utf-8")
+
+    assert "content.displays.first(where:" in source
+    assert "CGMainDisplayID()" in source
+    assert "CGDisplayIsOnline" in source
+    assert "CGDisplayIsAsleep" in source
+    assert "configuration.width = display.width" in source
+    assert "configuration.height = display.height" in source
+    assert 'case "displays"' in source
+    assert 'arguments[3] == "--display-id"' in source
