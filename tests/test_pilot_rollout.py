@@ -7,12 +7,13 @@ from guardian_core.models import EnforcementAction, PolicyDecision, RiskCategory
 from guardian_core.pilot import (
     TECHNICAL_TELEMETRY_FIELDS,
     AlertApproval,
+    BlockPilotApproval,
     PilotMode,
     PilotRolloutConfig,
     apply_pilot_rollout,
     load_pilot_rollout,
 )
-from risk_engine.calibration import VersionSet
+from risk_engine.calibration import RiskControlDecision, VersionSet
 
 ROOT = Path(__file__).resolve().parents[1]
 PILOT_CONFIG_PATH = ROOT / "config" / "pilot-rollout.v1.json"
@@ -41,6 +42,45 @@ def alert_only_config() -> PilotRolloutConfig:
             "mode": PilotMode.ALERT_ONLY,
             "cohort_ids": frozenset({"pilot-alert-a"}),
             "alert_approvals": (approval,),
+        }
+    )
+
+
+def block_control_decision(
+    *,
+    maximum_action: EnforcementAction = EnforcementAction.BLOCK,
+    kill_switch_active: bool = False,
+) -> RiskControlDecision:
+    return RiskControlDecision(
+        maximum_action=maximum_action,
+        calibrated_confidence=0.98,
+        ambiguous=False,
+        block_gate_approved=True,
+        kill_switch_active=kill_switch_active,
+        reason="R3 gate result",
+    )
+
+
+def limited_block_config() -> PilotRolloutConfig:
+    alert_config = alert_only_config()
+    approval = BlockPilotApproval(
+        approval_id="block-dangerous-contact-cohort-a-v1",
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_ids=frozenset({"pilot-alert-a"}),
+        versions=VERSIONS,
+        shadow_window_id="staging-dangerous-contact-01",
+        alert_pilot_window_id="pilot-alert-dangerous-contact-01",
+        eval_gate_passed=True,
+        shadow_gate_passed=True,
+        alert_pilot_gate_passed=True,
+        product_safety_approved=True,
+        engineering_approved=True,
+        rollback_tested=True,
+    )
+    return alert_config.model_copy(
+        update={
+            "mode": PilotMode.LIMITED_BLOCK,
+            "block_approvals": (approval,),
         }
     )
 
@@ -121,6 +161,58 @@ def test_alert_only_requires_exact_approved_category_cohort_and_versions(
         cohort_id=cohort_id,
         versions=versions,
         config=alert_only_config(),
+    )
+
+    assert gated.action == EnforcementAction.LOG
+    assert audit.approval_id is None
+
+
+def test_limited_block_requires_exact_pilot_and_upstream_gates() -> None:
+    gated, audit = apply_pilot_rollout(
+        proposed_block(),
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_id="pilot-alert-a",
+        versions=VERSIONS,
+        config=limited_block_config(),
+        risk_control_decision=block_control_decision(),
+    )
+
+    assert gated.action == EnforcementAction.BLOCK
+    assert audit.approval_id == "block-dangerous-contact-cohort-a-v1"
+
+
+@pytest.mark.parametrize(
+    "risk_control_decision",
+    [
+        None,
+        block_control_decision(maximum_action=EnforcementAction.ALERT),
+        block_control_decision(kill_switch_active=True),
+    ],
+)
+def test_limited_block_falls_back_to_approved_alert_when_upstream_gate_fails(
+    risk_control_decision: RiskControlDecision | None,
+) -> None:
+    gated, audit = apply_pilot_rollout(
+        proposed_block(),
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_id="pilot-alert-a",
+        versions=VERSIONS,
+        config=limited_block_config(),
+        risk_control_decision=risk_control_decision,
+    )
+
+    assert gated.action == EnforcementAction.ALERT
+    assert audit.approval_id == "alert-dangerous-contact-v1"
+
+
+def test_limited_block_fails_to_log_on_version_mismatch() -> None:
+    gated, audit = apply_pilot_rollout(
+        proposed_block(),
+        category=RiskCategory.DANGEROUS_CONTACT,
+        cohort_id="pilot-alert-a",
+        versions=VERSIONS.model_copy(update={"model": "model-v2"}),
+        config=limited_block_config(),
+        risk_control_decision=block_control_decision(),
     )
 
     assert gated.action == EnforcementAction.LOG

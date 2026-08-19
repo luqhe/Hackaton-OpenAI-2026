@@ -73,3 +73,16 @@ contagens e cortes por categoria para evitar que uma média global esconda regre
 Taxas vazias retornam `0` acompanhadas do denominador `0`; consumidores não devem interpretar esse
 valor como qualidade comprovada. Métricas só autorizam promoção quando a amostra representativa e
 os gates documentados forem revisados externamente.
+
+## Bloqueio limitado por categoria e coorte (R5-11)
+
+`LIMITED_BLOCK` exige duas camadas independentes. Primeiro, os controles R3 precisam retornar
+`maximum_action=BLOCK`, confirmar o gate exato de versões e indicar kill switch inativo. Depois, a
+aprovação do piloto deve corresponder a categoria, coorte, modelo, prompt e dataset e registrar:
+eval, shadow representativo, janela anterior de `ALERT_ONLY`, Product Safety, Engineering e teste de
+rollback aprovados.
+
+Se qualquer requisito de `BLOCK` falhar, a ação só recua para `ALERT` quando existe uma aprovação
+de alerta exata; sem ela, recua para `LOG`. Assim, uma aprovação ampla, outra coorte ou uma mudança
+de versão nunca promove uma intervenção por herança. O baseline mantém `block_approvals=[]` e todos
+os kill switches R3 ativos, portanto nenhum bloqueio real está autorizado no estado versionado.

@@ -4,6 +4,7 @@
   "mode": "TECHNICAL_SHADOW",
   "cohort_ids": ["pilot-technical"],
   "alert_approvals": [],
+  "block_approvals": [],
   "technical_telemetry_fields": [
     "agent_version",
     "api_latency_ms",

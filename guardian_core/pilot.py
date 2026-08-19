@@ -6,7 +6,7 @@ from pathlib import Path
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from guardian_core.models import EnforcementAction, PolicyDecision, RiskCategory
-from risk_engine.calibration import VersionSet
+from risk_engine.calibration import RiskControlDecision, VersionSet
 
 
 class PilotMode(StrEnum):
@@ -38,6 +38,7 @@ class PilotRolloutConfig(BaseModel):
     cohort_ids: frozenset[str] = Field(min_length=1)
     technical_telemetry_fields: frozenset[str] = TECHNICAL_TELEMETRY_FIELDS
     alert_approvals: tuple[AlertApproval, ...] = ()
+    block_approvals: tuple[BlockPilotApproval, ...] = ()
 
     @model_validator(mode="after")
     def validate_technical_telemetry(self) -> PilotRolloutConfig:
@@ -68,6 +69,36 @@ class AlertApproval(BaseModel):
                 self.shadow_gate_passed,
                 self.product_safety_approved,
                 self.engineering_approved,
+            )
+        )
+
+
+class BlockPilotApproval(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    approval_id: str = Field(min_length=1, max_length=120)
+    category: RiskCategory
+    cohort_ids: frozenset[str] = Field(min_length=1)
+    versions: VersionSet
+    shadow_window_id: str = Field(min_length=1, max_length=120)
+    alert_pilot_window_id: str = Field(min_length=1, max_length=120)
+    eval_gate_passed: bool
+    shadow_gate_passed: bool
+    alert_pilot_gate_passed: bool
+    product_safety_approved: bool
+    engineering_approved: bool
+    rollback_tested: bool
+
+    @property
+    def approved(self) -> bool:
+        return all(
+            (
+                self.eval_gate_passed,
+                self.shadow_gate_passed,
+                self.alert_pilot_gate_passed,
+                self.product_safety_approved,
+                self.engineering_approved,
+                self.rollback_tested,
             )
         )
 
@@ -111,6 +142,28 @@ def _matching_alert_approval(
     )
 
 
+def _matching_block_approval(
+    config: PilotRolloutConfig,
+    *,
+    category: RiskCategory | None,
+    cohort_id: str,
+    versions: VersionSet,
+) -> BlockPilotApproval | None:
+    if category is None:
+        return None
+    return next(
+        (
+            approval
+            for approval in config.block_approvals
+            if approval.approved
+            and approval.category == category
+            and cohort_id in approval.cohort_ids
+            and approval.versions == versions
+        ),
+        None,
+    )
+
+
 def apply_pilot_rollout(
     decision: PolicyDecision,
     *,
@@ -118,6 +171,7 @@ def apply_pilot_rollout(
     cohort_id: str,
     versions: VersionSet,
     config: PilotRolloutConfig,
+    risk_control_decision: RiskControlDecision | None = None,
 ) -> tuple[PolicyDecision, PilotActionDecision]:
     """Apply the last, fail-safe rollout gate before an action reaches the device."""
     approval: AlertApproval | None = None
@@ -144,8 +198,48 @@ def apply_pilot_rollout(
             effective = EnforcementAction.ALERT
             reason = "Approved category, cohort and exact versions permit ALERT but never BLOCK"
     else:
-        effective = decision.action
-        reason = "Pilot rollout mode allows the proposed action"
+        alert_approval = _matching_alert_approval(
+            config,
+            category=category,
+            cohort_id=cohort_id,
+            versions=versions,
+        )
+        block_approval = _matching_block_approval(
+            config,
+            category=category,
+            cohort_id=cohort_id,
+            versions=versions,
+        )
+        if decision.action in {EnforcementAction.IGNORE, EnforcementAction.LOG}:
+            effective = decision.action
+            reason = "Non-intervention action is within the limited-block ceiling"
+        elif decision.action == EnforcementAction.ALERT:
+            effective = EnforcementAction.ALERT if alert_approval else EnforcementAction.LOG
+            approval = alert_approval
+            reason = (
+                "Exact pilot alert approval permits ALERT"
+                if alert_approval
+                else "Category, cohort and exact versions lack an approved alert gate"
+            )
+        else:
+            upstream_allows_block = (
+                risk_control_decision is not None
+                and risk_control_decision.maximum_action == EnforcementAction.BLOCK
+                and risk_control_decision.block_gate_approved
+                and not risk_control_decision.kill_switch_active
+            )
+            if block_approval and upstream_allows_block:
+                effective = EnforcementAction.BLOCK
+                approval = block_approval
+                reason = "Exact R3 and pilot category/cohort gates permit limited BLOCK"
+            else:
+                effective = EnforcementAction.ALERT if alert_approval else EnforcementAction.LOG
+                approval = alert_approval
+                reason = (
+                    "BLOCK gate failed; exact alert approval limits the action to ALERT"
+                    if alert_approval
+                    else "BLOCK gate failed and no exact alert approval exists"
+                )
 
     gated = decision
     if effective != decision.action:
