@@ -1,0 +1,59 @@
+[
+  {
+    "schema_version": "guardian.shadow-window.v1",
+    "window_id": "synthetic-r3-baseline-v1",
+    "scope": "SYNTHETIC_BASELINE",
+    "category": "DANGEROUS_CONTACT",
+    "versions": {
+      "classifier_interface": "guardian.classifier.v1",
+      "model": "heuristic-context-v1",
+      "prompt": "heuristic-rules.v1",
+      "dataset": "guardian-synthetic-context-v1.0.0"
+    },
+    "minimum_samples": 2,
+    "category_samples": 5,
+    "maximum_false_positive_rate": 0.1,
+    "observed_false_positive_rate": 0.0,
+    "stable": true,
+    "release_eligible": false,
+    "reason": "Synthetic baseline is reproducible but cannot authorize a real intervention"
+  },
+  {
+    "schema_version": "guardian.shadow-window.v1",
+    "window_id": "synthetic-r3-baseline-v1",
+    "scope": "SYNTHETIC_BASELINE",
+    "category": "ADULT_CONTENT",
+    "versions": {
+      "classifier_interface": "guardian.classifier.v1",
+      "model": "heuristic-context-v1",
+      "prompt": "heuristic-rules.v1",
+      "dataset": "guardian-synthetic-context-v1.0.0"
+    },
+    "minimum_samples": 2,
+    "category_samples": 2,
+    "maximum_false_positive_rate": 0.1,
+    "observed_false_positive_rate": 0.0,
+    "stable": true,
+    "release_eligible": false,
+    "reason": "Synthetic baseline is reproducible but cannot authorize a real intervention"
+  },
+  {
+    "schema_version": "guardian.shadow-window.v1",
+    "window_id": "synthetic-r3-baseline-v1",
+    "scope": "SYNTHETIC_BASELINE",
+    "category": "HATE_SPEECH",
+    "versions": {
+      "classifier_interface": "guardian.classifier.v1",
+      "model": "heuristic-context-v1",
+      "prompt": "heuristic-rules.v1",
+      "dataset": "guardian-synthetic-context-v1.0.0"
+    },
+    "minimum_samples": 2,
+    "category_samples": 2,
+    "maximum_false_positive_rate": 0.1,
+    "observed_false_positive_rate": 0.0,
+    "stable": true,
+    "release_eligible": false,
+    "reason": "Synthetic baseline is reproducible but cannot authorize a real intervention"
+  }
+]

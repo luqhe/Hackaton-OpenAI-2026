@@ -59,6 +59,14 @@ class GuardianAPIClient:
             content_type="text/plain",
         )
 
+    def upload_png_evidence(self, incident_id: str, content: bytes) -> dict[str, str]:
+        return self._request(
+            "POST",
+            f"/api/incidents/{incident_id}/evidence",
+            content,
+            content_type="image/png",
+        )
+
     def record_telemetry(self, device_id: str, payload: dict[str, Any]) -> None:
         self._request("POST", f"/api/devices/{device_id}/telemetry", payload)
 

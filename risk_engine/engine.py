@@ -24,6 +24,14 @@ CONTACT_SIGNALS: dict[str, tuple[str, ...]] = {
     "location": (r"\bwhere do you live\b", r"\bonde você mora\b"),
 }
 
+DISCLOSURE_SIGNALS: dict[str, tuple[str, ...]] = {
+    "age": (r"\bi am (?:[6-9]|1[0-7])\b", r"\beu tenho (?:[6-9]|1[0-7]) anos\b"),
+    "school": (r"\bmy school is\b", r"\bminha escola é\b"),
+    "social": (r"\bmy instagram is\b", r"\bmeu instagram é\b"),
+    "photo": (r"\bhere is my (?:picture|photo)\b", r"\baqui está minha foto\b"),
+    "location": (r"\bi live at\b", r"\beu moro (?:na|no|em)\b"),
+}
+
 ADULT_SIGNALS = (
     r"\bexplicit sexual content\b",
     r"\bporn(?:ography|ográfico|ografia)?\b",
@@ -44,13 +52,6 @@ def _matches(patterns: tuple[str, ...], text: str) -> bool:
 def assess_risk(observation: Observation) -> RiskAssessment:
     messages = "\n".join(f"{message.speaker}: {message.text}" for message in observation.recent_messages)
     combined = f"{observation.window_title}\n{observation.visible_text}\n{messages}".lower()
-
-    if any(marker in combined for marker in EDUCATIONAL_MARKERS):
-        return RiskAssessment(
-            risk=RiskLevel.SAFE,
-            confidence=0.94,
-            explanation="Sensitive terminology appears in an educational context.",
-        )
 
     contact_hits = [label for label, patterns in CONTACT_SIGNALS.items() if _matches(patterns, combined)]
     if len(contact_hits) >= 3:
@@ -74,6 +75,30 @@ def assess_risk(observation: Observation) -> RiskAssessment:
             confidence=min(0.48 + len(contact_hits) * 0.1, 0.72),
             evidence=[f"Personal-information request detected: {label}" for label in contact_hits],
             explanation="The conversation contains an isolated request for personal information; more context is needed.",
+        )
+
+    disclosure_hits = [
+        label for label, patterns in DISCLOSURE_SIGNALS.items() if _matches(patterns, combined)
+    ]
+    if disclosure_hits:
+        risk = RiskLevel.HIGH if len(disclosure_hits) >= 2 else RiskLevel.MEDIUM
+        return RiskAssessment(
+            risk=risk,
+            category=RiskCategory.DANGEROUS_CONTACT,
+            direction=RiskDirection.CHILD_AS_ACTOR,
+            confidence=min(0.58 + len(disclosure_hits) * 0.12, 0.94),
+            evidence=[f"Personal-information disclosure detected: {label}" for label in disclosure_hits],
+            explanation=(
+                "The visible conversation indicates that the child may be sharing personal information; "
+                "the direction is recorded separately from incoming requests."
+            ),
+        )
+
+    if any(marker in combined for marker in EDUCATIONAL_MARKERS):
+        return RiskAssessment(
+            risk=RiskLevel.SAFE,
+            confidence=0.94,
+            explanation="Sensitive terminology appears in an educational context.",
         )
 
     if _matches(ADULT_SIGNALS, combined):

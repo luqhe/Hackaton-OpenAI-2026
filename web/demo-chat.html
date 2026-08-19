@@ -1,0 +1,168 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta
+      name="description"
+      content="Conversa sintética e controlada para a demonstração local do Guardian."
+    />
+    <meta name="theme-color" content="#102f28" />
+    <title>Guardian · Demo Chat</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+    <link rel="stylesheet" href="/static/demo-chat.css" />
+    <script src="/static/demo-chat.js" defer></script>
+  </head>
+  <body class="demo-chat-page" data-demo-chat="controlled">
+    <main class="demo-stage">
+      <header class="demo-masthead">
+        <a class="brand" href="/" aria-label="Guardian — voltar à visão geral">
+          <span class="brand-mark" aria-hidden="true">G</span>
+          <span>Guardian</span>
+        </a>
+        <div class="demo-mode">
+          <span aria-hidden="true"></span>
+          Cenário sintético · local
+        </div>
+      </header>
+
+      <div class="demo-layout">
+        <section class="chat-window" aria-labelledby="chat-title">
+          <header class="chat-header">
+            <div class="server-avatar" aria-hidden="true"><span></span></div>
+            <div>
+              <p class="eyebrow">MINECRAFT · SERVIDOR CRIATIVO</p>
+              <h1 id="chat-title">Chat da vila</h1>
+              <p class="online-state">
+                <span aria-hidden="true"></span> 2 jogadores online
+              </p>
+            </div>
+            <span class="request-count" id="request-count">0 de 4 pedidos</span>
+          </header>
+
+          <div
+            class="chat-thread"
+            id="chat-thread"
+            role="log"
+            aria-live="polite"
+          >
+            <p class="chat-day"><span>Hoje, 16:42</span></p>
+            <article class="message message-child">
+              <div class="player-avatar player-lucas" aria-hidden="true">L</div>
+              <div class="message-copy">
+                <div class="message-meta">
+                  <strong>Lucas</strong><time>16:42</time>
+                </div>
+                <p>Terminei a ponte até a montanha! Ficou gigante.</p>
+              </div>
+            </article>
+            <article class="message message-peer">
+              <div class="player-avatar player-peer" aria-hidden="true">A</div>
+              <div class="message-copy">
+                <div class="message-meta">
+                  <strong>Alex</strong><time>16:42</time>
+                </div>
+                <p>Ficou muito boa! Bora procurar diamante depois?</p>
+              </div>
+            </article>
+          </div>
+
+          <footer class="chat-controls">
+            <button class="demo-button secondary" id="reset-demo" type="button">
+              Reset
+            </button>
+            <p class="keyboard-hint">
+              <kbd>→</kbd> ou <kbd>Espaço</kbd> para avançar
+            </p>
+            <button class="demo-button primary" id="reveal-next" type="button">
+              Revelar pedido 1
+              <span aria-hidden="true">→</span>
+            </button>
+          </footer>
+        </section>
+
+        <aside class="presenter-panel" aria-labelledby="capture-title">
+          <p class="eyebrow">CONTROLE DO APRESENTADOR</p>
+          <div
+            class="capture-state"
+            id="capture-state"
+            role="status"
+            aria-live="polite"
+          >
+            <span class="capture-icon" aria-hidden="true">✓</span>
+            <div>
+              <h2 id="capture-title">Cena segura</h2>
+              <p>Pronta para captura</p>
+            </div>
+          </div>
+          <p class="presenter-copy" id="presenter-copy">
+            A conversa começa sem sinais de risco. Revele os pedidos um por vez
+            para mostrar a progressão.
+          </p>
+          <ol
+            class="signal-progress"
+            aria-label="Pedidos de informação pessoal revelados"
+          >
+            <li data-progress="1"><span>1</span> Idade</li>
+            <li data-progress="2"><span>2</span> Escola</li>
+            <li data-progress="3"><span>3</span> Instagram</li>
+            <li data-progress="4"><span>4</span> Foto pessoal</li>
+          </ol>
+          <button
+            class="demo-button fullscreen"
+            id="toggle-fullscreen"
+            type="button"
+          >
+            <span aria-hidden="true">⛶</span> Tela cheia
+          </button>
+          <p class="shortcut-list">
+            <kbd>R</kbd> reset · <kbd>F</kbd> tela cheia
+          </p>
+        </aside>
+      </div>
+    </main>
+
+    <template id="risk-messages">
+      <article class="message message-peer risk-message" data-step="1">
+        <div class="player-avatar player-peer" aria-hidden="true">A</div>
+        <div class="message-copy">
+          <div class="message-meta">
+            <strong>Alex</strong><time>16:43</time>
+          </div>
+          <p>Você tem quantos anos?</p>
+          <span class="risk-signal">Pedido de idade</span>
+        </div>
+      </article>
+      <article class="message message-peer risk-message" data-step="2">
+        <div class="player-avatar player-peer" aria-hidden="true">A</div>
+        <div class="message-copy">
+          <div class="message-meta">
+            <strong>Alex</strong><time>16:43</time>
+          </div>
+          <p>Qual é o nome da sua escola?</p>
+          <span class="risk-signal">Pedido de escola</span>
+        </div>
+      </article>
+      <article class="message message-peer risk-message" data-step="3">
+        <div class="player-avatar player-peer" aria-hidden="true">A</div>
+        <div class="message-copy">
+          <div class="message-meta">
+            <strong>Alex</strong><time>16:44</time>
+          </div>
+          <p>Manda seu Instagram para a gente conversar por lá.</p>
+          <span class="risk-signal">Pedido de contato pessoal</span>
+        </div>
+      </article>
+      <article class="message message-peer risk-message" data-step="4">
+        <div class="player-avatar player-peer" aria-hidden="true">A</div>
+        <div class="message-copy">
+          <div class="message-meta">
+            <strong>Alex</strong><time>16:44</time>
+          </div>
+          <p>Manda uma foto sua para eu saber quem você é.</p>
+          <span class="risk-signal">Pedido de foto pessoal</span>
+        </div>
+      </article>
+    </template>
+  </body>
+</html>

@@ -4,16 +4,20 @@ import argparse
 import hashlib
 import json
 import os
+import tempfile
 import time
+from collections.abc import Sequence
 from pathlib import Path
 
 from agent.client import GuardianAPIClient, GuardianAPIError
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
-from guardian_core.config import GuardianSettings
+from agent.observer import MacOSObserver
+from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
 from guardian_core.models import IncidentCreate, Observation, PolicyRule, TelemetryUpdate
 from guardian_core.policy import apply_policy
 from risk_engine import assess_risk
+from risk_engine.openai import OpenAIRiskError, assess_screenshot
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -105,6 +109,90 @@ def run_fixture(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_live_demo(args: argparse.Namespace) -> int:
+    settings = GuardianSettings.from_env()
+    if not args.controlled_demo:
+        raise ValueError("live-demo requires --controlled-demo")
+    if settings.environment != Environment.DEVELOPMENT:
+        raise ValueError("--controlled-demo is available only in development")
+    if args.countdown < 0:
+        raise ValueError("--countdown cannot be negative")
+
+    client = GuardianAPIClient(args.api_url)
+    observer = MacOSObserver()
+    temporary_file = tempfile.NamedTemporaryFile(prefix="guardian-", suffix=".png", delete=False)
+    screenshot_path = Path(temporary_file.name)
+    temporary_file.close()
+
+    try:
+        for remaining in range(args.countdown, 0, -1):
+            print(f"capture_in={remaining}")
+            time.sleep(1)
+        observer.capture_screen(screenshot_path)
+        application = observer.get_active_application()
+        _, screen_hash = observer.detect_change(screenshot_path)
+        observation = Observation(app_name=application, screen_hash=screen_hash)
+        assessment = assess_screenshot(
+            screenshot_path,
+            observation,
+            timeout=args.openai_timeout,
+        )
+
+        rules = [PolicyRule.model_validate(item) for item in client.get_policy(args.child_id)]
+        decision = apply_policy(assessment, rules)
+        decision = apply_runtime_release_gate(
+            decision,
+            settings,
+            fixture_input=args.controlled_demo,
+        )
+        print(
+            f"source=OPENAI risk={assessment.risk} category={assessment.category} "
+            f"confidence={assessment.confidence:.2f}"
+        )
+        print(f"decision={decision.action} reason={decision.reason}")
+
+        client.record_telemetry(
+            args.device_id,
+            TelemetryUpdate(
+                child_id=args.child_id,
+                screen_changes=1,
+                suspicious_events=1 if assessment.risk != "SAFE" else 0,
+                app_name=observation.app_name,
+            ).model_dump(mode="json"),
+        )
+        if decision.action == "IGNORE":
+            print("No incident created.")
+            return 0
+
+        enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
+        incident_payload = IncidentCreate(
+            child_id=args.child_id,
+            device_id=args.device_id,
+            application=observation.app_name,
+            occurred_at=observation.timestamp,
+            assessment=assessment,
+            decision=decision,
+            deduplication_key=hashlib.sha256(
+                f"{args.device_id}|{observation.app_name}|{screen_hash}".encode()
+            ).hexdigest(),
+        )
+        incident = client.create_incident(incident_payload.model_dump(mode="json"))
+        client.upload_png_evidence(incident["id"], screenshot_path.read_bytes())
+        if decision.action == "BLOCK":
+            enforcer.block(observation.app_name)
+        screenshot_path.unlink(missing_ok=True)
+
+        print(f"incident={incident['id']} status={incident['status']}")
+        print(f"parent_view={args.api_url}/incidents/{incident['id']}")
+        print(f"child_view={args.api_url}/child?incident={incident['id']}")
+        if args.wait_for_unlock:
+            print("Waiting for a parent decision. Press Ctrl+C to stop.")
+            poll_commands(client, args.device_id, enforcer, args.poll_interval)
+        return 0
+    finally:
+        screenshot_path.unlink(missing_ok=True)
+
+
 def poll_commands(
     client: GuardianAPIClient,
     device_id: str,
@@ -151,6 +239,29 @@ def build_parser() -> argparse.ArgumentParser:
     )
     demo.set_defaults(handler=run_fixture)
 
+    live_demo = subparsers.add_parser(
+        "live-demo",
+        help="Capture one real macOS screenshot and assess it with OpenAI",
+    )
+    live_demo.add_argument(
+        "--controlled-demo",
+        action="store_true",
+        help="Confirm synthetic demo content; accepted only in development",
+    )
+    live_demo.add_argument(
+        "--api-url",
+        default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"),
+    )
+    live_demo.add_argument("--child-id", default="child-demo")
+    live_demo.add_argument("--device-id", default="device-demo")
+    live_demo.add_argument("--state-path", type=Path, default=PROJECT_ROOT / ".data" / "agent-state.json")
+    live_demo.add_argument("--countdown", type=int, default=3)
+    live_demo.add_argument("--openai-timeout", type=float, default=20)
+    live_demo.add_argument("--wait-for-unlock", action="store_true")
+    live_demo.add_argument("--poll-interval", type=float, default=2.0)
+    live_demo.add_argument("--real-enforcement", action="store_true")
+    live_demo.set_defaults(handler=run_live_demo)
+
     poll = subparsers.add_parser("poll", help="Poll and execute pending device commands")
     poll.add_argument("--api-url", default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"))
     poll.add_argument("--device-id", default="device-demo")
@@ -170,11 +281,11 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def main() -> int:
-    args = build_parser().parse_args()
+def main(argv: Sequence[str] | None = None) -> int:
+    args = build_parser().parse_args(argv)
     try:
         return args.handler(args)
-    except (GuardianAPIError, OSError, ValueError) as error:
+    except (GuardianAPIError, OpenAIRiskError, OSError, ValueError) as error:
         print(f"Guardian agent error: {error}")
         return 1
     except KeyboardInterrupt:

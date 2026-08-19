@@ -3,6 +3,7 @@ $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 
 & ".\.venv\Scripts\python.exe" scripts\validate_stage0.py
+& ".\.venv\Scripts\python.exe" scripts\run_r3_evals.py --check
 & ".\.venv\Scripts\python.exe" -m ruff check .
 & ".\.venv\Scripts\python.exe" -m ruff format --check agent api guardian_core risk_engine scripts tests
 & ".\.venv\Scripts\python.exe" -m pytest
