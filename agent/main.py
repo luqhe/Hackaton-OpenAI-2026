@@ -4,13 +4,13 @@ import argparse
 import hashlib
 import json
 import os
-import tempfile
 import time
 from collections.abc import Sequence
 from pathlib import Path
 
 from agent.client import GuardianAPIClient, GuardianAPIError
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
+from agent.evidence import EphemeralCapture
 from agent.observer import MacOSObserver
 from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
@@ -120,9 +120,8 @@ def run_live_demo(args: argparse.Namespace) -> int:
 
     client = GuardianAPIClient(args.api_url)
     observer = MacOSObserver()
-    temporary_file = tempfile.NamedTemporaryFile(prefix="guardian-", suffix=".png", delete=False)
-    screenshot_path = Path(temporary_file.name)
-    temporary_file.close()
+    temporary_capture = EphemeralCapture.create()
+    screenshot_path = temporary_capture.path
 
     try:
         for remaining in range(args.countdown, 0, -1):
@@ -180,7 +179,7 @@ def run_live_demo(args: argparse.Namespace) -> int:
         client.upload_png_evidence(incident["id"], screenshot_path.read_bytes())
         if decision.action == "BLOCK":
             enforcer.block(observation.app_name)
-        screenshot_path.unlink(missing_ok=True)
+        temporary_capture.delete()
 
         print(f"incident={incident['id']} status={incident['status']}")
         print(f"parent_view={args.api_url}/incidents/{incident['id']}")
@@ -190,7 +189,7 @@ def run_live_demo(args: argparse.Namespace) -> int:
             poll_commands(client, args.device_id, enforcer, args.poll_interval)
         return 0
     finally:
-        screenshot_path.unlink(missing_ok=True)
+        temporary_capture.delete()
 
 
 def poll_commands(
