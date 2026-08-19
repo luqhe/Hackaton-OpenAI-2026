@@ -49,7 +49,7 @@ CREATE TABLE IF NOT EXISTS devices (
     platform TEXT NOT NULL,
     paired_at TEXT NOT NULL,
     last_seen_at TEXT,
-    protection_status TEXT NOT NULL DEFAULT 'PROTECTED'
+    protection_status TEXT NOT NULL DEFAULT 'PENDING'
 );
 
 CREATE TABLE IF NOT EXISTS policies (
@@ -179,7 +179,14 @@ class GuardianStore:
                     id, child_id, name, platform, paired_at, last_seen_at, protection_status
                 ) VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                ("device-demo", "child-demo", "MacBook Pro", "macOS", now, now, "PROTECTED"),
+                ("device-demo", "child-demo", "MacBook Pro", "macOS", now, None, "PENDING"),
+            )
+            connection.execute(
+                """
+                UPDATE devices
+                SET last_seen_at = NULL, protection_status = 'PENDING'
+                WHERE protection_status = 'PROTECTED' AND last_seen_at = paired_at
+                """
             )
             defaults = (
                 (RiskCategory.ADULT_CONTENT, PolicyAction.BLOCK, 0.82),
@@ -218,9 +225,9 @@ class GuardianStore:
             connection.execute(
                 """
                 INSERT INTO devices(id, child_id, name, platform, paired_at, last_seen_at, protection_status)
-                VALUES (?, ?, ?, ?, ?, ?, 'PROTECTED')
+                VALUES (?, ?, ?, ?, ?, NULL, 'PENDING')
                 """,
-                (device_id, request.child_id, request.device_name, request.platform, now, now),
+                (device_id, request.child_id, request.device_name, request.platform, now),
             )
         return self.get_device(device_id)
 
@@ -242,7 +249,7 @@ class GuardianStore:
     def touch_device(self, device_id: str) -> None:
         with self.connect() as connection:
             cursor = connection.execute(
-                "UPDATE devices SET last_seen_at = ?, protection_status = 'PROTECTED' WHERE id = ?",
+                "UPDATE devices SET last_seen_at = ? WHERE id = ?",
                 (_now_iso(), device_id),
             )
             if cursor.rowcount == 0:
