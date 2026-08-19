@@ -288,6 +288,20 @@ def test_rotation_has_grace_and_idempotency_key_cannot_change_public_key(tmp_pat
         )
         assert conflict.status_code == 409
 
+        chained = signed_request(
+            client,
+            old,
+            "POST",
+            "/api/agent/credentials/rotate",
+            clock[0] + timedelta(seconds=2),
+            {
+                "public_key": conflicting_keys.public_key,
+                "idempotency_key": "second-rotation-key-1234",
+            },
+        )
+        assert chained.status_code == 422
+        assert chained.json() == {"detail": "rotation_not_allowed"}
+
         clock[0] += timedelta(minutes=4, seconds=59)
         assert signed_request(client, old, "GET", "/api/agent/policy", clock[0]).status_code == 200
         clock[0] += timedelta(seconds=2)
@@ -309,7 +323,13 @@ def test_commands_are_versioned_expiring_idempotent_and_device_bound(tmp_path) -
         incident = signed_request(
             client, credential, "POST", "/api/agent/incidents", now, incident_payload()
         ).json()
-        assert client.post(f"/api/incidents/{incident['id']}/unlock").status_code == 200
+        assert (
+            client.post(
+                f"/api/incidents/{incident['id']}/unlock",
+                headers={"X-Test-Family": "family-a"},
+            ).status_code
+            == 200
+        )
 
         polled = signed_request(
             client,

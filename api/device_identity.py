@@ -345,11 +345,13 @@ class DeviceIdentityStore:
                 )
             new_id = f"cred-{secrets.token_urlsafe(18)}"
             expires_at = now + CREDENTIAL_TTL
-            connection.execute(
+            rotated = connection.execute(
                 "UPDATE device_credentials SET status = 'ROTATING', expires_at = ? "
                 "WHERE credential_id = ? AND status = 'ACTIVE'",
                 ((now + ROTATION_GRACE).isoformat(), principal.credential_id),
             )
+            if rotated.rowcount != 1:
+                raise PairingError("rotation_not_allowed")
             connection.execute(
                 """
                 INSERT INTO device_credentials(

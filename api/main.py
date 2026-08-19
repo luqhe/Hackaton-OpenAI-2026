@@ -109,7 +109,7 @@ def create_app(
 
     def require_demo_agent_route() -> None:
         if not runtime_settings.demo_mode:
-            raise HTTPException(status_code=404, detail="Not found")
+            raise HTTPException(status_code=404, detail="Resource not found")
 
     def parent_scope(request: Request) -> FamilyScope:
         if family_scope_resolver is not None:
@@ -403,7 +403,7 @@ def create_app(
     @app.post("/api/devices/pair", response_model=Device, status_code=status.HTTP_201_CREATED)
     def pair_device(
         payload: DevicePairRequest,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> Device:
         require_demo_agent_route()
         if not store.child_exists(scope.family_id, payload.child_id):
@@ -434,7 +434,7 @@ def create_app(
     def replace_policy(
         child_id: str,
         rules: list[PolicyRule] = Body(min_length=1, max_length=20),
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> list[PolicyRule]:
         if not store.child_exists(scope.family_id, child_id):
             raise HTTPException(status_code=404, detail="Resource not found")
@@ -446,9 +446,8 @@ def create_app(
     def create_incident(
         payload: IncidentCreate,
         response: Response,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> Incident:
-        require_demo_agent_route()
         if not store.child_exists(scope.family_id, payload.child_id):
             raise HTTPException(status_code=404, detail="Resource not found")
         if not store.device_exists(scope.family_id, payload.device_id):
@@ -489,7 +488,7 @@ def create_app(
     def request_unlock(
         incident_id: str,
         payload: UnlockRequest,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> Incident:
         try:
             return store.request_unlock(scope.family_id, incident_id, payload.explanation)
@@ -501,10 +500,14 @@ def create_app(
     @app.post("/api/incidents/{incident_id}/unlock", response_model=Incident)
     def unlock(
         incident_id: str,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> Incident:
         try:
-            return store.unlock_incident(scope.family_id, incident_id)
+            return store.unlock_incident(
+                scope.family_id,
+                incident_id,
+                command_created_at=device_clock(),
+            )
         except KeyError:
             raise HTTPException(status_code=404, detail="Resource not found") from None
         except ValueError as error:
@@ -513,7 +516,7 @@ def create_app(
     @app.post("/api/incidents/{incident_id}/keep-blocked", response_model=Incident)
     def keep_blocked(
         incident_id: str,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> Incident:
         try:
             return store.keep_blocked(scope.family_id, incident_id)
@@ -526,9 +529,8 @@ def create_app(
     async def upload_evidence(
         incident_id: str,
         request: Request,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> dict[str, str]:
-        require_demo_agent_route()
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         if content_type not in ALLOWED_EVIDENCE_TYPES:
             raise HTTPException(status_code=415, detail="Unsupported evidence type")
@@ -557,7 +559,6 @@ def create_app(
         after_id: int = Query(default=0, ge=0),
         scope: FamilyScope = Depends(require_family_scope),
     ) -> list[DeviceCommand]:
-        require_demo_agent_route()
         try:
             return store.pending_commands(scope.family_id, device_id, after_id)
         except KeyError:
@@ -567,7 +568,7 @@ def create_app(
     def acknowledge_command(
         device_id: str,
         command_id: int,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> DeviceCommand:
         require_demo_agent_route()
         try:
@@ -579,7 +580,7 @@ def create_app(
     def record_telemetry(
         device_id: str,
         payload: TelemetryUpdate,
-        scope: FamilyScope = Depends(require_mutation_scope),
+        scope: FamilyScope = Depends(parent_scope),
     ) -> Response:
         require_demo_agent_route()
         try:

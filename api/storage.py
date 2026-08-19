@@ -1282,7 +1282,13 @@ class GuardianStore:
             )
         return self.get_incident(family_id, incident_id)
 
-    def unlock_incident(self, family_id: str, incident_id: str) -> Incident:
+    def unlock_incident(
+        self,
+        family_id: str,
+        incident_id: str,
+        *,
+        command_created_at: datetime | None = None,
+    ) -> Incident:
         with self.connect() as connection:
             row = connection.execute(
                 """
@@ -1297,7 +1303,9 @@ class GuardianStore:
                 return self.get_incident(family_id, incident_id)
             if row["status"] not in (IncidentStatus.BLOCKED, IncidentStatus.UNLOCK_REQUESTED):
                 raise ValueError(f"Cannot unlock incident from status {row['status']}")
-            now = _now_iso()
+            if command_created_at is not None and command_created_at.tzinfo is None:
+                raise ValueError("Command timestamp must be timezone-aware")
+            now = (command_created_at or datetime.now(UTC)).isoformat()
             connection.execute(
                 """
                 UPDATE incidents SET status = ?, updated_at = ?
