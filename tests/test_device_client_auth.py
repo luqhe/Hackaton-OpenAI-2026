@@ -120,6 +120,15 @@ def test_all_device_methods_use_authenticated_identity_free_routes(monkeypatch) 
     client.create_device_incident({"application": "Browser"})
     client.upload_device_text_evidence("incident-1", "evidence")
     client.upload_device_png_evidence("incident-1", b"png")
+    client.record_device_heartbeat(
+        {
+            "agent_version": "0.1.0",
+            "screen_recording_permission": True,
+            "accessibility_permission": True,
+            "observer_healthy": True,
+            "observed_at": now.isoformat(),
+        }
+    )
     client.record_device_telemetry({"screen_changes": 1, "observed_at": now.isoformat()})
     client.pending_device_commands(after_id=9, wait_seconds=4)
     client.acknowledge_device_command(7, result="FAILED", error_code="UNSUPPORTED_COMMAND")
@@ -131,6 +140,7 @@ def test_all_device_methods_use_authenticated_identity_free_routes(monkeypatch) 
         "/api/agent/incidents",
         "/api/agent/incidents/incident-1/evidence",
         "/api/agent/incidents/incident-1/evidence",
+        "/api/agent/heartbeat",
         "/api/agent/telemetry",
         "/api/agent/commands",
         "/api/agent/commands/7/ack",
@@ -138,11 +148,11 @@ def test_all_device_methods_use_authenticated_identity_free_routes(monkeypatch) 
     ]
     assert "device-secret-scope" not in "\n".join(request.full_url for request in captured)
     assert json.loads(captured[1].data) == {"application": "Browser"}
-    assert json.loads(captured[4].data) == {
+    assert json.loads(captured[5].data) == {
         "screen_changes": 1,
         "observed_at": now.isoformat(),
     }
-    assert urlsplit(captured[5].full_url).query == "after_id=9&wait_seconds=4"
+    assert urlsplit(captured[6].full_url).query == "after_id=9&wait_seconds=4"
     for request in captured:
         assert request.get_header("Authorization") == f"GuardianDevice {credential.credential_id}"
 
@@ -158,3 +168,17 @@ def test_authenticated_client_requires_tls_except_explicit_local_test_mode() -> 
             credential=credential,
             allow_insecure_localhost=True,
         )
+
+
+def test_command_cursor_scope_changes_with_backend_or_authenticated_device() -> None:
+    first = issue_device_credential("device-1")
+    second = issue_device_credential("device-2")
+
+    original = GuardianAPIClient("https://guardian.example", credential=first)
+    same = GuardianAPIClient("https://guardian.example", credential=first)
+    other_backend = GuardianAPIClient("https://guardian-backup.example", credential=first)
+    other_device = GuardianAPIClient("https://guardian.example", credential=second)
+
+    assert original.command_scope == same.command_scope
+    assert original.command_scope != other_backend.command_scope
+    assert original.command_scope != other_device.command_scope

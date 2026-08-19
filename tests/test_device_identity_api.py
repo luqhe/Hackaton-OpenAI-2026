@@ -208,7 +208,53 @@ def test_authenticated_incident_ignores_no_client_identity_and_rejects_identity_
         assert rejected.status_code == 422
 
 
-def test_rotation_grace_repair_revokes_old_identity_and_parent_revocation_fails_closed(tmp_path) -> None:
+def test_signed_heartbeat_derives_device_and_family_from_credential(tmp_path) -> None:
+    now = datetime(2026, 8, 19, 18, 0, tzinfo=UTC)
+    app = create_app(
+        settings=settings(tmp_path),
+        family_scope_resolver=scope_resolver,
+        device_clock=lambda: now,
+        pairing_pepper=b"pairing-test-pepper-with-at-least-32-bytes",
+    )
+    with TestClient(app) as client:
+        seed_family(app, "family-a", "child-a")
+        _, credential = pair(client, "family-a", "child-a")
+        payload = {
+            "agent_version": "0.1.0",
+            "screen_recording_permission": True,
+            "accessibility_permission": True,
+            "observer_healthy": True,
+            "offline_queue_depth": 0,
+            "observed_at": now.isoformat(),
+        }
+
+        heartbeat = signed_request(
+            client,
+            credential,
+            "POST",
+            "/api/agent/heartbeat",
+            now,
+            payload,
+        )
+
+        assert heartbeat.status_code == 200
+        assert heartbeat.json()["id"] == credential.device_id
+        assert heartbeat.json()["family_id"] == "family-a"
+        assert heartbeat.json()["child_id"] == "child-a"
+        assert heartbeat.json()["protection_status"] == "PROTECTED"
+        assert (
+            client.post(
+                f"/api/devices/{credential.device_id}/heartbeat",
+                headers={"X-Test-Family": "family-a"},
+                json=payload,
+            ).status_code
+            == 404
+        )
+
+
+def test_cross_family_repair_requires_explicit_transfer_and_cannot_revoke_old_identity(
+    tmp_path,
+) -> None:
     clock = [datetime(2026, 8, 19, 18, 0, tzinfo=UTC)]
     app = create_app(
         settings=settings(tmp_path),
@@ -220,19 +266,35 @@ def test_rotation_grace_repair_revokes_old_identity_and_parent_revocation_fails_
         seed_family(app, "family-a", "child-a")
         seed_family(app, "family-b", "child-b")
         _, old_credential = pair(client, "family-a", "child-a", "install-stable-123456789")
-        _, new_credential = pair(client, "family-b", "child-b", "install-stable-123456789")
-
-        assert signed_request(client, old_credential, "GET", "/api/agent/policy", clock[0]).status_code == 401
-        assert signed_request(client, new_credential, "GET", "/api/agent/policy", clock[0]).status_code == 200
-        revoked = client.post(
-            f"/api/devices/{new_credential.device_id}/credentials/revoke",
+        challenge = client.post(
+            "/api/pairing/challenges",
             headers={"X-Test-Family": "family-b"},
+            json={"child_id": "child-b"},
+        ).json()
+        new_keys = generate_device_key_pair("install-stable-123456789")
+        rejected = client.post(
+            "/api/device/pair",
+            json={
+                "challenge_id": challenge["challenge_id"],
+                "code": challenge["code"],
+                "device_name": "MacBook",
+                "platform": "macOS",
+                "installation_id": new_keys.installation_id,
+                "public_key": new_keys.public_key,
+            },
+        )
+
+        assert rejected.status_code == 410
+        assert signed_request(client, old_credential, "GET", "/api/agent/policy", clock[0]).status_code == 200
+        revoked = client.post(
+            f"/api/devices/{old_credential.device_id}/credentials/revoke",
+            headers={"X-Test-Family": "family-a"},
         )
         assert revoked.status_code == 204
         assert (
             signed_request(
                 client,
-                new_credential,
+                old_credential,
                 "GET",
                 "/api/agent/policy",
                 clock[0] + timedelta(seconds=1),

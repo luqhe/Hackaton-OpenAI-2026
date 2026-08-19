@@ -43,6 +43,8 @@ from guardian_core.models import (
 )
 from guardian_core.version import SCHEMA_VERSION
 
+HEARTBEAT_STALE_AFTER = timedelta(minutes=2)
+
 
 def _now_iso() -> str:
     return datetime.now(UTC).isoformat()
@@ -1048,6 +1050,17 @@ class GuardianStore:
             ).fetchone()
         if row is None:
             raise KeyError(device_id)
+        protection_status = row["protection_status"]
+        if row["lifecycle_status"] != DeviceLifecycleStatus.ACTIVE or row["last_seen_at"] is None:
+            protection_status = "DEGRADED"
+        else:
+            try:
+                last_seen_at = datetime.fromisoformat(row["last_seen_at"])
+            except ValueError:
+                protection_status = "DEGRADED"
+            else:
+                if last_seen_at < datetime.now(UTC) - HEARTBEAT_STALE_AFTER:
+                    protection_status = "DEGRADED"
         return Device(
             id=row["id"],
             family_id=row["family_id"],
@@ -1057,7 +1070,7 @@ class GuardianStore:
             paired_at=row["paired_at"],
             last_seen_at=row["last_seen_at"],
             lifecycle_status=row["lifecycle_status"],
-            protection_status=row["protection_status"],
+            protection_status=protection_status,
         )
 
     def list_devices(self, family_id: str) -> list[Device]:
@@ -1099,7 +1112,7 @@ class GuardianStore:
                 WHERE family_id = ? AND id = ? AND lifecycle_status = 'ACTIVE'
                 """,
                 (
-                    heartbeat.observed_at.isoformat(),
+                    _now_iso(),
                     protection_status,
                     family_id,
                     device_id,

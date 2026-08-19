@@ -218,6 +218,16 @@ def create_app(
         )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
+    @app.post("/api/agent/heartbeat", response_model=Device)
+    def authenticated_heartbeat(
+        payload: DeviceHeartbeat,
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> Device:
+        try:
+            return store.record_heartbeat(principal.family_id, principal.device_id, payload)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Device not found") from None
+
     @app.post(
         "/api/agent/incidents/{incident_id}/evidence",
         status_code=status.HTTP_201_CREATED,
@@ -315,7 +325,7 @@ def create_app(
             production_ready=False,
             notes=[
                 "Current observation input is limited to controlled fixtures.",
-                "Account sessions and family isolation are implemented; device credentials are pending.",
+                "Account sessions, family isolation, and signed device requests are implemented.",
                 "The real-enforcement setting is an authorization gate, not proof of an active agent.",
             ],
         )
@@ -420,9 +430,14 @@ def create_app(
             raise HTTPException(status_code=404, detail="Resource not found") from None
 
     @app.post("/api/devices/{device_id}/heartbeat", response_model=Device)
-    def record_heartbeat(device_id: str, payload: DeviceHeartbeat) -> Device:
+    def record_heartbeat(
+        device_id: str,
+        payload: DeviceHeartbeat,
+        scope: FamilyScope = Depends(parent_scope),
+    ) -> Device:
+        require_demo_agent_route()
         try:
-            return store.record_heartbeat(device_id, payload)
+            return store.record_heartbeat(scope.family_id, device_id, payload)
         except KeyError:
             raise HTTPException(status_code=404, detail="Device not found") from None
 

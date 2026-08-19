@@ -66,7 +66,7 @@ def test_revoked_permission_stops_observer_without_blocking(monkeypatch, tmp_pat
         classmethod(lambda cls: settings(tmp_path)),
     )
     monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: RevokedObserver())
-    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: object())
+    monkeypatch.setattr(agent_main, "build_authenticated_client", lambda api_url: object())
     monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: Enforcer())
     monkeypatch.setattr(agent_main, "flush_offline_outbox", lambda *args: 0)
 
@@ -86,10 +86,10 @@ def test_backend_policy_failure_is_fail_open(monkeypatch, tmp_path) -> None:
             return "Guardian Demo Chat"
 
     class OfflineClient:
-        def record_heartbeat(self, device_id, payload):
+        def record_device_heartbeat(self, payload):
             return None
 
-        def get_policy(self, child_id):
+        def get_device_policy(self):
             raise GuardianAPIError("backend unavailable")
 
     class Enforcer:
@@ -102,7 +102,7 @@ def test_backend_policy_failure_is_fail_open(monkeypatch, tmp_path) -> None:
         classmethod(lambda cls: settings(tmp_path)),
     )
     monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: Observer())
-    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: OfflineClient())
+    monkeypatch.setattr(agent_main, "build_authenticated_client", lambda api_url: OfflineClient())
     monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: Enforcer())
     monkeypatch.setattr(agent_main, "flush_offline_outbox", lambda *args: 0)
     monkeypatch.setattr(

@@ -68,6 +68,8 @@ def test_capabilities_report_only_implemented_features(tmp_path) -> None:
         assert capabilities["microphone"] is False
         assert capabilities["camera"] is False
         assert capabilities["production_ready"] is False
+        assert any("signed device requests" in note for note in capabilities["notes"])
+        assert all("device credentials are pending" not in note for note in capabilities["notes"])
 
         health = client.get("/api/health").json()
         assert health["environment"] == "test"

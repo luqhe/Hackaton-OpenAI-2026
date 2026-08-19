@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import ipaddress
 import json
 import secrets
@@ -37,6 +38,13 @@ class GuardianAPIClient:
         self._parsed_base_url = urlsplit(self.base_url)
         if credential is not None:
             self._require_secure_transport()
+
+    @property
+    def command_scope(self) -> str:
+        if self.credential is None:
+            raise GuardianAPIError("device credential is required for command scope")
+        value = f"{self.base_url}\0{self.credential.device_id}".encode()
+        return hashlib.sha256(value).hexdigest()
 
     def _require_secure_transport(self) -> None:
         if self._parsed_base_url.scheme != "https":
@@ -167,6 +175,9 @@ class GuardianAPIClient:
             content_type="image/png",
             authenticated=True,
         )
+
+    def record_device_heartbeat(self, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", "/api/agent/heartbeat", payload, authenticated=True)
 
     def record_device_telemetry(self, payload: dict[str, Any]) -> None:
         self._request("POST", "/api/agent/telemetry", payload, authenticated=True)

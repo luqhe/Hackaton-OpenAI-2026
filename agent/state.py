@@ -14,6 +14,7 @@ class AgentRuntimeState:
     session_id: str = "interactive"
     last_screen_hash: str | None = None
     last_command_id: int = 0
+    command_scope: str | None = None
     updated_at: str | None = None
 
     def update(self, **changes: object) -> AgentRuntimeState:

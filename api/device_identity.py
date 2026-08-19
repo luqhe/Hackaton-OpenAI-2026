@@ -196,18 +196,25 @@ class DeviceIdentityStore:
                 connection.commit()
                 raise PairingError("invalid_or_expired_pairing")
             previous = connection.execute(
-                "SELECT device_id FROM device_installations WHERE installation_id = ?",
+                """
+                SELECT installation.device_id, device.family_id
+                FROM device_installations installation
+                JOIN devices device ON device.id = installation.device_id
+                WHERE installation.installation_id = ?
+                """,
                 (request.installation_id,),
             ).fetchone()
             if previous is not None:
+                if previous["family_id"] != challenge["family_id"]:
+                    raise PairingError("invalid_pairing")
                 connection.execute(
                     "UPDATE device_credentials SET status = 'REVOKED', revoked_at = ? "
-                    "WHERE device_id = ? AND status != 'REVOKED'",
-                    (now.isoformat(), previous["device_id"]),
+                    "WHERE family_id = ? AND device_id = ? AND status != 'REVOKED'",
+                    (now.isoformat(), challenge["family_id"], previous["device_id"]),
                 )
                 connection.execute(
-                    "UPDATE devices SET lifecycle_status = 'REVOKED' WHERE id = ?",
-                    (previous["device_id"],),
+                    "UPDATE devices SET lifecycle_status = 'REVOKED' WHERE family_id = ? AND id = ?",
+                    (challenge["family_id"], previous["device_id"]),
                 )
             connection.execute(
                 """
