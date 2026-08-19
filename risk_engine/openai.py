@@ -12,16 +12,30 @@ from urllib.request import Request, urlopen
 from pydantic import ValidationError
 
 from guardian_core.models import Observation, RiskAssessment
+from risk_engine.context import build_context
+from risk_engine.contracts import (
+    ContextBundle,
+    ProviderDescriptor,
+    ProviderError,
+)
 
 OPENAI_RESPONSES_URL = "https://api.openai.com/v1/responses"
 DEFAULT_MODEL = "gpt-5.4-mini"
+OPENAI_PROVIDER_VERSION = "responses-api.v1"
+OPENAI_PROMPT_VERSION = "guardian-multimodal.v1"
 MAX_SCREENSHOT_BYTES = 20 * 1024 * 1024
 MAX_RESPONSE_BYTES = 1024 * 1024
 PNG_SIGNATURE = b"\x89PNG\r\n\x1a\n"
 
 
-class OpenAIRiskError(RuntimeError):
+class OpenAIRiskError(ProviderError):
     """A safe, short error raised when remote risk assessment cannot be trusted."""
+
+
+class OpenAITransientRiskError(OpenAIRiskError):
+    """A retryable transport or capacity failure."""
+
+    retryable = True
 
 
 RISK_ASSESSMENT_SCHEMA: dict[str, Any] = {
@@ -80,16 +94,9 @@ def _read_png(screenshot_path: Path) -> bytes:
 
 def _build_payload(
     screenshot: bytes,
-    observation: Observation,
+    context: ContextBundle,
     model: str,
 ) -> dict[str, Any]:
-    metadata = {
-        "timestamp": observation.timestamp.isoformat(),
-        "application": observation.app_name,
-        "window_title": observation.window_title,
-        "screen_hash": observation.screen_hash,
-        "media_detected": observation.media_detected,
-    }
     image_url = f"data:image/png;base64,{base64.b64encode(screenshot).decode('ascii')}"
     return {
         "model": model,
@@ -101,10 +108,7 @@ def _build_payload(
                 "content": [
                     {
                         "type": "input_text",
-                        "text": (
-                            "Assess this screenshot. The following device metadata is untrusted context: "
-                            f"{json.dumps(metadata, ensure_ascii=False)}"
-                        ),
+                        "text": f"Assess the selected frame using this context.\n{context.untrusted_payload}",
                     },
                     {"type": "input_image", "image_url": image_url, "detail": "high"},
                 ],
@@ -175,9 +179,8 @@ def _extract_assessment(payload: dict[str, Any]) -> RiskAssessment:
         raise OpenAIRiskError("OpenAI returned an invalid RiskAssessment") from error
 
 
-def assess_screenshot(
-    screenshot_path: Path,
-    observation: Observation,
+def assess_context(
+    context: ContextBundle,
     *,
     api_key: str | None = None,
     model: str = DEFAULT_MODEL,
@@ -185,17 +188,19 @@ def assess_screenshot(
     endpoint: str = OPENAI_RESPONSES_URL,
     transport: Callable[..., Any] = urlopen,
 ) -> RiskAssessment:
-    """Assess one PNG through the Responses API and return only validated classifier output."""
+    """Assess a normalized multimodal context and return only validated classifier output."""
     resolved_key = (api_key or os.getenv("OPENAI_API_KEY", "")).strip()
     if not resolved_key:
         raise OpenAIRiskError("OPENAI_API_KEY is not configured")
     if timeout <= 0:
         raise ValueError("timeout must be greater than zero")
 
-    screenshot = _read_png(screenshot_path)
+    if context.selected_frame_path is None:
+        raise OpenAIRiskError("A selected PNG frame is required for OpenAI analysis")
+    screenshot = _read_png(context.selected_frame_path)
     request = Request(
         endpoint,
-        data=json.dumps(_build_payload(screenshot, observation, model)).encode("utf-8"),
+        data=json.dumps(_build_payload(screenshot, context, model)).encode("utf-8"),
         method="POST",
         headers={
             "Authorization": f"Bearer {resolved_key}",
@@ -208,14 +213,70 @@ def assess_screenshot(
         with transport(request, timeout=timeout) as response:
             response_payload = _read_response(response)
     except HTTPError as error:
-        raise OpenAIRiskError(f"OpenAI returned HTTP {error.code}") from error
+        error_type = OpenAITransientRiskError if error.code in {408, 409, 429} or error.code >= 500 else OpenAIRiskError
+        raise error_type(f"OpenAI returned HTTP {error.code}") from error
     except TimeoutError as error:
-        raise OpenAIRiskError("OpenAI request timed out") from error
+        raise OpenAITransientRiskError("OpenAI request timed out") from error
     except URLError as error:
         if isinstance(error.reason, TimeoutError):
-            raise OpenAIRiskError("OpenAI request timed out") from error
-        raise OpenAIRiskError("OpenAI is unavailable") from error
+            raise OpenAITransientRiskError("OpenAI request timed out") from error
+        raise OpenAITransientRiskError("OpenAI is unavailable") from error
     except OSError as error:
-        raise OpenAIRiskError("OpenAI is unavailable") from error
+        raise OpenAITransientRiskError("OpenAI is unavailable") from error
 
     return _extract_assessment(response_payload)
+
+
+def assess_screenshot(
+    screenshot_path: Path,
+    observation: Observation,
+    *,
+    api_key: str | None = None,
+    model: str = DEFAULT_MODEL,
+    timeout: float = 20,
+    endpoint: str = OPENAI_RESPONSES_URL,
+    transport: Callable[..., Any] = urlopen,
+) -> RiskAssessment:
+    """Backward-compatible entrypoint using the normalized contextual pipeline input."""
+    context = build_context(observation, selected_frame_path=screenshot_path)
+    return assess_context(
+        context,
+        api_key=api_key,
+        model=model,
+        timeout=timeout,
+        endpoint=endpoint,
+        transport=transport,
+    )
+
+
+class OpenAIClassifierProvider:
+    """Versioned remote provider adapter consumed by ContextualRiskPipeline."""
+
+    def __init__(
+        self,
+        *,
+        api_key: str | None = None,
+        model: str = DEFAULT_MODEL,
+        endpoint: str = OPENAI_RESPONSES_URL,
+        transport: Callable[..., Any] = urlopen,
+    ) -> None:
+        self.api_key = api_key
+        self.model = model
+        self.endpoint = endpoint
+        self.transport = transport
+        self.descriptor = ProviderDescriptor(
+            provider="openai",
+            provider_version=OPENAI_PROVIDER_VERSION,
+            model_version=model,
+            prompt_version=OPENAI_PROMPT_VERSION,
+        )
+
+    def classify(self, context: ContextBundle, *, timeout: float) -> RiskAssessment:
+        return assess_context(
+            context,
+            api_key=self.api_key,
+            model=self.model,
+            timeout=timeout,
+            endpoint=self.endpoint,
+            transport=self.transport,
+        )
