@@ -23,6 +23,9 @@ include = ["agent*", "api*", "guardian_core*", "risk_engine*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = "-q -p no:cacheprovider --basetemp=.test-runtime"
+markers = [
+  "macos_e2e: requires a permissioned macOS host and real Screen Recording",
+]
 
 [tool.ruff]
 target-version = "py311"
