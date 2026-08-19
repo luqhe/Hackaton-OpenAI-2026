@@ -94,6 +94,10 @@ class FakeClient:
         self.events.append("telemetry")
         self.telemetry.append((device_id, payload))
 
+    def record_heartbeat(self, device_id, payload):
+        self.events.append("heartbeat")
+        return {"id": device_id, "protection_status": "PROTECTED"}
+
     def create_incident(self, payload):
         self.events.append("incident")
         self.incidents.append(payload)
@@ -363,7 +367,7 @@ def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp
 
     assert agent_main.run_observer(args) == 0
 
-    assert events[:3] == ["capture", "active-app", "assessment"]
+    assert events[:4] == ["capture", "active-app", "heartbeat", "assessment"]
     assert client.incidents[0]["decision"]["action"] == "ALERT"
     assert client.uploads[0][0] == "incident-live"
     assert enforcer.blocked == []

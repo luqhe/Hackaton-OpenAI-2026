@@ -70,6 +70,9 @@ class GuardianAPIClient:
     def record_telemetry(self, device_id: str, payload: dict[str, Any]) -> None:
         self._request("POST", f"/api/devices/{device_id}/telemetry", payload)
 
+    def record_heartbeat(self, device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+        return self._request("POST", f"/api/devices/{device_id}/heartbeat", payload)
+
     def pending_commands(self, device_id: str, after_id: int) -> list[dict[str, Any]]:
         return self._request("GET", f"/api/devices/{device_id}/commands?after_id={after_id}")
 

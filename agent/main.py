@@ -19,6 +19,7 @@ from agent.state import AgentStateStore
 from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
 from guardian_core.models import (
+    DeviceHeartbeat,
     IncidentCreate,
     Observation,
     PolicyDecision,
@@ -27,6 +28,7 @@ from guardian_core.models import (
     TelemetryUpdate,
 )
 from guardian_core.policy import apply_policy
+from guardian_core.version import APP_VERSION
 from risk_engine import assess_risk
 from risk_engine.openai import OpenAIRiskError, assess_screenshot
 
@@ -316,6 +318,16 @@ def run_observer(args: argparse.Namespace) -> int:
                 )
                 state_store.save(runtime_state)
                 application = observer.get_active_application()
+                client.record_heartbeat(
+                    args.device_id,
+                    DeviceHeartbeat(
+                        agent_version=APP_VERSION,
+                        screen_recording_permission=True,
+                        accessibility_permission=True,
+                        observer_healthy=True,
+                        offline_queue_depth=len(outbox.items()),
+                    ).model_dump(mode="json"),
+                )
                 observation = Observation(app_name=application, screen_hash=screen_hash)
                 context.add(observation, session_id=args.session_id)
                 assessment, decision = apply_validated_policy(

@@ -15,6 +15,7 @@ from guardian_core.models import (
     DailyReport,
     Device,
     DeviceCommand,
+    DeviceHeartbeat,
     DevicePairRequest,
     Incident,
     IncidentCreate,
@@ -120,6 +121,13 @@ def create_app(
     def get_device(device_id: str) -> Device:
         try:
             return store.get_device(device_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Device not found") from None
+
+    @app.post("/api/devices/{device_id}/heartbeat", response_model=Device)
+    def record_heartbeat(device_id: str, payload: DeviceHeartbeat) -> Device:
+        try:
+            return store.record_heartbeat(device_id, payload)
         except KeyError:
             raise HTTPException(status_code=404, detail="Device not found") from None
 
