@@ -32,7 +32,16 @@ from guardian_core.models import (
 from guardian_core.policy import apply_policy
 from guardian_core.version import APP_VERSION
 from risk_engine import assess_risk
-from risk_engine.openai import OpenAIRiskError, assess_screenshot
+from risk_engine.context import build_context
+from risk_engine.contracts import ContextBundle, ProviderDescriptor
+from risk_engine.openai import (
+    DEFAULT_MODEL,
+    OPENAI_PROMPT_VERSION,
+    OPENAI_PROVIDER_VERSION,
+    OpenAIRiskError,
+    assess_screenshot,
+)
+from risk_engine.pipeline import AnalysisSource, ContextualRiskPipeline
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOGGER = StructuredAgentLogger()
@@ -52,6 +61,15 @@ def apply_validated_policy(
     decision = apply_policy(assessment, rules)
     decision = apply_runtime_release_gate(decision, settings, fixture_input=fixture_input)
     return assessment, decision
+
+
+def reject_invalid_pipeline_output(errors: tuple[str, ...]) -> None:
+    invalid_errors = {"ProviderInvalidOutputError", "OpenAIInvalidRiskError"}
+    if invalid_errors.intersection(errors):
+        raise ValueError(
+            "Invalid classifier assessment: unexpected or incomplete fields, including action, "
+            "are rejected before policy evaluation"
+        )
 
 
 def flush_offline_outbox(outbox: PersistentOutbox, client: GuardianAPIClient) -> int:
@@ -100,6 +118,26 @@ def create_incident_or_queue(
 def runtime_state_store_for(args: argparse.Namespace) -> AgentStateStore:
     default_path = args.state_path.with_name("runtime-state.json")
     return AgentStateStore(getattr(args, "runtime_state_path", default_path))
+
+
+class LiveScreenshotProvider:
+    """Adapter keeps the live entrypoint injectable while using the R3 pipeline."""
+
+    descriptor = ProviderDescriptor(
+        provider="openai",
+        provider_version=OPENAI_PROVIDER_VERSION,
+        model_version=DEFAULT_MODEL,
+        prompt_version=OPENAI_PROMPT_VERSION,
+    )
+
+    def classify(self, context: ContextBundle, *, timeout: float) -> RiskAssessment:
+        if context.selected_frame_path is None:
+            raise OpenAIRiskError("A selected PNG frame is required for live analysis")
+        return assess_screenshot(
+            context.selected_frame_path,
+            context.observation,
+            timeout=timeout,
+        )
 
 
 def load_fixture(path: Path) -> tuple[Observation, str]:
@@ -220,21 +258,26 @@ def run_live_demo(args: argparse.Namespace) -> int:
         application = observer.get_active_application()
         _, screen_hash = observer.detect_change(screenshot_path)
         observation = Observation(app_name=application, screen_hash=screen_hash)
+        context = build_context(observation, selected_frame_path=screenshot_path)
+        pipeline_result = ContextualRiskPipeline(
+            remote_provider=LiveScreenshotProvider(),
+            timeout_seconds=args.openai_timeout,
+        ).assess(context)
+        reject_invalid_pipeline_output(pipeline_result.errors)
         assessment, decision = apply_validated_policy(
-            assess_screenshot(
-                screenshot_path,
-                observation,
-                timeout=args.openai_timeout,
-            ),
+            pipeline_result.assessment,
             client=client,
             child_id=args.child_id,
             settings=settings,
             fixture_input=args.controlled_demo,
         )
+        source = "OPENAI" if pipeline_result.source == AnalysisSource.REMOTE else pipeline_result.source.value
         print(
-            f"source=OPENAI risk={assessment.risk} category={assessment.category} "
+            f"source={source} risk={assessment.risk} category={assessment.category} "
             f"confidence={assessment.confidence:.2f}"
         )
+        if pipeline_result.errors:
+            print(f"analysis_fallback={','.join(pipeline_result.errors)} automatic_block=false")
         print(f"decision={decision.action} reason={decision.reason}")
 
         client.record_telemetry(
@@ -340,12 +383,17 @@ def run_observer(args: argparse.Namespace) -> int:
                 )
                 observation = Observation(app_name=application, screen_hash=screen_hash)
                 context.add(observation, session_id=args.session_id)
+                risk_context = build_context(
+                    observation,
+                    selected_frame_path=screenshot_path,
+                )
+                pipeline_result = ContextualRiskPipeline(
+                    remote_provider=LiveScreenshotProvider(),
+                    timeout_seconds=args.openai_timeout,
+                ).assess(risk_context)
+                reject_invalid_pipeline_output(pipeline_result.errors)
                 assessment, decision = apply_validated_policy(
-                    assess_screenshot(
-                        screenshot_path,
-                        observation,
-                        timeout=args.openai_timeout,
-                    ),
+                    pipeline_result.assessment,
                     client=client,
                     child_id=args.child_id,
                     settings=settings,
@@ -363,10 +411,17 @@ def run_observer(args: argparse.Namespace) -> int:
                     args.device_id,
                     telemetry,
                 )
+                source = (
+                    "OPENAI"
+                    if pipeline_result.source == AnalysisSource.REMOTE
+                    else pipeline_result.source.value
+                )
                 print(
-                    f"source=OPENAI risk={assessment.risk} category={assessment.category} "
+                    f"source={source} risk={assessment.risk} category={assessment.category} "
                     f"confidence={assessment.confidence:.2f} decision={decision.action}"
                 )
+                if pipeline_result.errors:
+                    print(f"analysis_fallback={','.join(pipeline_result.errors)} automatic_block=false")
                 AGENT_LOGGER.event(
                     "observation_assessed",
                     risk=assessment.risk,

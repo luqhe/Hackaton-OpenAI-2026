@@ -52,6 +52,7 @@ guardian/
 ├── api/              aplicação FastAPI e persistência SQLite
 ├── guardian_core/    contratos compartilhados e Policy Engine
 ├── risk_engine/      avaliação contextual reproduzível
+├── evals/            dataset sintético, gates e resultados versionados do R3
 ├── fixtures/         cenários controlados da demo
 ├── config/           exemplos seguros por ambiente
 ├── docs/             gates, segurança, privacidade e ADRs
@@ -223,6 +224,7 @@ Para instalar e executar todos os checks de desenvolvimento:
 ```bash
 pnpm install
 python scripts/validate_stage0.py
+python scripts/run_r3_evals.py --check
 python -m ruff check .
 python -m ruff format --check agent api guardian_core risk_engine scripts tests
 python -m pytest
@@ -231,7 +233,7 @@ pnpm lint:js
 pnpm format:check
 ```
 
-Os testes cobrem classificação contextual segura e perigosa, release gates, configuração por ambiente, capacidades declaradas, versionamento de schema, deduplicação, evidência, contestação, desbloqueio, fila de comandos, telemetria e proteção contra bloqueio de aplicativo essencial.
+Os testes cobrem classificação contextual segura e perigosa, provider versionado, isolamento contra prompt injection, timeout/retry/circuit breaker, calibração, kill switches, regressão congelada, shadow mode, release gates, configuração por ambiente, capacidades declaradas, versionamento de schema, deduplicação, evidência, contestação, desbloqueio, fila de comandos, telemetria e proteção contra bloqueio de aplicativo essencial.
 
 ## Rotas da interface
 
@@ -290,7 +292,9 @@ Os dados de demonstração usam `child-demo` e `device-demo`. O banco, evidênci
 - Aplicativos essenciais possuem denylist interna.
 - Evidências aceitam apenas PNG, JPEG, WebP ou texto, até 4 MB.
 - Caminhos de evidência não são fornecidos pelo cliente e são validados antes da leitura.
-- Conteúdo observado é dado não confiável; a heurística não executa instruções da tela.
+- Conteúdo observado é dado não confiável, delimitado fora das instruções do classificador e validado por schema estrito.
+- O pré-filtro evita envio remoto apenas quando uma regra `SAFE` confiável é identificada; falhas remotas nunca habilitam bloqueio.
+- O baseline sintético de eval/shadow é reproduzível, mas não autoriza uma intervenção real.
 - A demo não captura microfone nem câmera.
 
 Este MVP não representa conformidade pronta para produção. Uso real com menores exige autenticação, autorização por família/dispositivo, criptografia, política de retenção e exclusão verificável, consentimento apropriado, revisão de LGPD/COPPA, auditoria, proteção contra adulteração e avaliação formal de falsos positivos.
@@ -298,7 +302,9 @@ Este MVP não representa conformidade pronta para produção. Uso real com menor
 ## Limites conhecidos
 
 - O risk engine de fixtures continua determinístico; captura controlada e o loop macOS usam o provider multimodal remoto.
+- O provider OpenAI opcional exige chave, macOS e permissão de captura; a demo canônica continua reproduzível com fixtures locais.
 - O helper Swift oferece ScreenCaptureKit e OCR Vision, mas a ponte versionada helper → agente (`R1-04`) permanece deliberadamente pendente.
+- Os evals atuais usam apenas cenários sintéticos pequenos e não demonstram desempenho populacional. Todos os kill switches de `BLOCK` real permanecem ativos.
 - A sincronização usa polling local, suficiente para a demo.
 - Não há autenticação, notificações push, múltiplas famílias ou deploy público.
 - O hash atual é criptográfico; um perceptual hash deve substituí-lo antes de observação contínua.

@@ -211,7 +211,7 @@ def test_safe_live_assessment_creates_no_incident(monkeypatch, tmp_path, capsys)
     assert not observer.screenshot_path.exists()
 
 
-def test_remote_failure_returns_nonzero_without_incident_or_block(monkeypatch, tmp_path, capsys) -> None:
+def test_remote_failure_uses_nonblocking_fallback_without_incident(monkeypatch, tmp_path, capsys) -> None:
     events, observer, client, enforcer = configure_live_fakes(monkeypatch, tmp_path, high_assessment())
 
     def fail_remote(*args, **kwargs):
@@ -220,12 +220,14 @@ def test_remote_failure_returns_nonzero_without_incident_or_block(monkeypatch, t
     monkeypatch.setattr(agent_main, "assess_screenshot", fail_remote)
     code = agent_main.main(["live-demo", "--controlled-demo", "--countdown", "0"])
 
-    assert code == 1
-    assert capsys.readouterr().out.strip().endswith("Guardian agent error: OpenAI request timed out")
+    assert code == 0
+    output = capsys.readouterr().out
+    assert "source=FALLBACK risk=SAFE" in output
+    assert "automatic_block=false" in output
     assert client.incidents == []
     assert client.uploads == []
     assert enforcer.blocked == []
-    assert "policy" not in events
+    assert "policy" in events
     assert not observer.screenshot_path.exists()
 
 

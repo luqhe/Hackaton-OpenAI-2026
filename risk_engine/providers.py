@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from guardian_core.models import Observation, RiskAssessment, RiskLevel
 from risk_engine.contracts import ContextBundle, ProviderDescriptor
-from risk_engine.engine import EDUCATIONAL_MARKERS, assess_risk
+from risk_engine.engine import assess_risk
 
 LOCAL_PROMPT_VERSION = "heuristic-rules.v1"
 FALLBACK_PROMPT_VERSION = "conservative-fallback.v1"
+RELIABLE_EDUCATIONAL_MARKERS = {"textbook", "livro didático"}
 
 
 def _observation_with_ocr(context: ContextBundle) -> Observation:
@@ -32,7 +33,11 @@ class HeuristicLocalProvider:
             return None
         observation = _observation_with_ocr(context)
         combined = f"{observation.window_title}\n{observation.visible_text}".lower()
-        if any(marker in combined for marker in EDUCATIONAL_MARKERS):
+        if (
+            any(marker in combined for marker in RELIABLE_EDUCATIONAL_MARKERS)
+            and not observation.recent_messages
+            and not observation.media_detected
+        ):
             return "EDUCATIONAL_CONTEXT"
         if (
             not combined.strip()

@@ -239,41 +239,43 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 
 ## Épico 3.1 — Pipeline de análise
 
-- [ ] `R3-01` Criar interface versionada para providers de classificação.
-- [ ] `R3-02` Separar análise local, análise remota e fallback.
-- [ ] `R3-03` Combinar OCR, frame selecionado, app, janela e contexto temporal.
-- [ ] `R3-04` Tratar conteúdo observado como dado não confiável.
-- [ ] `R3-05` Isolar instruções do sistema contra prompt injection visível na tela.
-- [ ] `R3-06` Validar output contra schema e rejeitar resposta incompleta.
-- [ ] `R3-07` Implementar timeout, retry limitado e circuit breaker.
-- [ ] `R3-08` Não enviar evidência remota quando o pré-filtro local concluir `SAFE` com regra confiável.
+- [x] `R3-01` Criar interface versionada para providers de classificação.
+- [x] `R3-02` Separar análise local, análise remota e fallback.
+- [x] `R3-03` Combinar OCR, frame selecionado, app, janela e contexto temporal.
+- [x] `R3-04` Tratar conteúdo observado como dado não confiável.
+- [x] `R3-05` Isolar instruções do sistema contra prompt injection visível na tela.
+- [x] `R3-06` Validar output contra schema e rejeitar resposta incompleta.
+- [x] `R3-07` Implementar timeout, retry limitado e circuit breaker.
+- [x] `R3-08` Não enviar evidência remota quando o pré-filtro local concluir `SAFE` com regra confiável.
 
 ## Épico 3.2 — Dataset e evals
 
-- [ ] `R3-09` Definir guia de anotação para categoria, direção, severidade e contexto.
-- [ ] `R3-10` Construir dataset legalmente utilizável com casos seguros, ambíguos e perigosos.
-- [ ] `R3-11` Incluir conteúdo educacional, jornalístico, citações, humor e falso positivo adversarial.
-- [ ] `R3-12` Separar treino/desenvolvimento, calibração e teste final.
-- [ ] `R3-13` Medir métricas por categoria, idade, aplicativo e direção do risco.
-- [ ] `R3-14` Criar suite de regressão obrigatória para mudança de prompt/modelo.
-- [ ] `R3-15` Versionar modelo, prompt, dataset e resultado de avaliação.
+- [x] `R3-09` Definir guia de anotação para categoria, direção, severidade e contexto.
+- [x] `R3-10` Construir dataset legalmente utilizável com casos seguros, ambíguos e perigosos.
+- [x] `R3-11` Incluir conteúdo educacional, jornalístico, citações, humor e falso positivo adversarial.
+- [x] `R3-12` Separar treino/desenvolvimento, calibração e teste final.
+- [x] `R3-13` Medir métricas por categoria, idade, aplicativo e direção do risco.
+- [x] `R3-14` Criar suite de regressão obrigatória para mudança de prompt/modelo.
+- [x] `R3-15` Versionar modelo, prompt, dataset e resultado de avaliação.
 
 ## Épico 3.3 — Calibração e decisão
 
-- [ ] `R3-16` Calibrar confiança por categoria.
-- [ ] `R3-17` Definir limiares distintos para `LOG`, `ALERT` e `BLOCK`.
-- [ ] `R3-18` Implementar zona ambígua sem bloqueio automático.
-- [ ] `R3-19` Medir taxa de contestação e reversão pelo responsável.
-- [ ] `R3-20` Impedir que atualização de modelo habilite bloqueio sem nova aprovação do gate.
-- [ ] `R3-21` Implementar kill switch por categoria e versão.
+- [x] `R3-16` Calibrar confiança por categoria.
+- [x] `R3-17` Definir limiares distintos para `LOG`, `ALERT` e `BLOCK`.
+- [x] `R3-18` Implementar zona ambígua sem bloqueio automático.
+- [x] `R3-19` Medir taxa de contestação e reversão pelo responsável.
+- [x] `R3-20` Impedir que atualização de modelo habilite bloqueio sem nova aprovação do gate.
+- [x] `R3-21` Implementar kill switch por categoria e versão.
 
 ## Épico 3.4 — Shadow mode
 
-- [ ] `R3-22` Registrar decisões simuladas sem intervir no dispositivo.
-- [ ] `R3-23` Comparar heurística, modelo, política e decisão humana.
-- [ ] `R3-24` Criar dashboard interno de falsos positivos e falsos negativos revisados.
-- [ ] `R3-25` Executar shadow mode antes de ativar alertas reais.
-- [ ] `R3-26` Executar nova janela de shadow mode antes de cada categoria entrar em `BLOCK`.
+- [x] `R3-22` Registrar decisões simuladas sem intervir no dispositivo.
+- [x] `R3-23` Comparar heurística, modelo, política e decisão humana.
+- [x] `R3-24` Criar dashboard interno de falsos positivos e falsos negativos revisados.
+- [x] `R3-25` Executar shadow mode antes de ativar alertas reais.
+- [x] `R3-26` Executar nova janela de shadow mode antes de cada categoria entrar em `BLOCK`.
+
+O baseline executado na Etapa 3 é sintético e reproduzível. Ele valida o mecanismo, não libera uso real: `ALERT`/`BLOCK` reais continuam condicionados a uma janela representativa `STAGING_COHORT`, e todos os kill switches de `BLOCK` permanecem ativos.
 
 ## Critérios de saída
 
