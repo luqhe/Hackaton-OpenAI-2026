@@ -130,7 +130,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 
 - [x] `R1-01` Criar helper Swift usando ScreenCaptureKit.
 - [x] `R1-02` Obter aplicativo e janela ativos por API nativa apropriada.
-- [ ] `R1-03` Integrar OCR local com Vision.
+- [x] `R1-03` Integrar OCR local com Vision.
 - [ ] `R1-04` Expor contrato versionado entre helper Swift e agente Python.
 - [ ] `R1-05` Tratar múltiplos monitores, mudança de resolução e suspensão.
 - [ ] `R1-06` Criar onboarding de permissões de Screen Recording e Accessibility/Automation.

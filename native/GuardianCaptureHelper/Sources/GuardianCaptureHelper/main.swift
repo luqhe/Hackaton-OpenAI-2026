@@ -3,6 +3,7 @@ import CoreGraphics
 import CoreMedia
 import Foundation
 import ScreenCaptureKit
+import Vision
 
 enum CaptureError: LocalizedError {
     case displayUnavailable
@@ -86,6 +87,27 @@ struct ActiveWindowService {
     }
 }
 
+struct TextRecognitionService {
+    func recognizeText(in imageURL: URL) throws -> [String] {
+        guard
+            let image = NSImage(contentsOf: imageURL),
+            let cgImage = image.cgImage(forProposedRect: nil, context: nil, hints: nil)
+        else {
+            throw ValidationError("OCR input must be a readable image.")
+        }
+
+        let request = VNRecognizeTextRequest()
+        request.recognitionLevel = .accurate
+        request.usesLanguageCorrection = true
+        request.recognitionLanguages = ["pt-BR", "en-US"]
+        try VNImageRequestHandler(cgImage: cgImage, options: [:]).perform([request])
+
+        return (request.results ?? []).compactMap { observation in
+            observation.topCandidates(1).first?.string
+        }
+    }
+}
+
 @main
 struct GuardianCaptureHelper {
     static func main() async {
@@ -114,6 +136,14 @@ struct GuardianCaptureHelper {
                 let payload = try encoder.encode(ActiveWindowService().current())
                 FileHandle.standardOutput.write(payload)
                 FileHandle.standardOutput.write(Data("\n".utf8))
+            case "ocr":
+                guard arguments.count == 3 else {
+                    throw ValidationError(usage)
+                }
+                let imageURL = URL(fileURLWithPath: arguments[2]).standardizedFileURL
+                let lines = try TextRecognitionService().recognizeText(in: imageURL)
+                FileHandle.standardOutput.write(Data(lines.joined(separator: "\n").utf8))
+                FileHandle.standardOutput.write(Data("\n".utf8))
             default:
                 throw ValidationError(usage)
             }
@@ -127,6 +157,7 @@ struct GuardianCaptureHelper {
     Usage:
       guardian-capture-helper capture /absolute/path/frame.png
       guardian-capture-helper active-window
+      guardian-capture-helper ocr /absolute/path/frame.png
     """
 }
 

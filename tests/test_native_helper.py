@@ -24,3 +24,14 @@ def test_native_helper_reads_frontmost_application_and_window() -> None:
     assert "kCGWindowOwnerPID" in source
     assert 'case "active-window"' in source
     assert "application.bundleIdentifier" in source
+
+
+def test_native_helper_performs_local_vision_ocr() -> None:
+    source = (HELPER_ROOT / "Sources" / "GuardianCaptureHelper" / "main.swift").read_text(encoding="utf-8")
+
+    assert "import Vision" in source
+    assert "VNRecognizeTextRequest" in source
+    assert "request.recognitionLevel = .accurate" in source
+    assert "request.usesLanguageCorrection = true" in source
+    assert "VNImageRequestHandler" in source
+    assert 'case "ocr"' in source
