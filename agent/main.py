@@ -29,9 +29,11 @@ from guardian_core.models import (
     RiskAssessment,
     TelemetryUpdate,
 )
+from guardian_core.pilot import apply_pilot_rollout, fail_safe_pilot_rollout, load_pilot_rollout
 from guardian_core.policy import apply_policy
 from guardian_core.version import APP_VERSION
 from risk_engine import assess_risk
+from risk_engine.calibration import VersionSet
 from risk_engine.context import build_context
 from risk_engine.contracts import ContextBundle, ProviderDescriptor
 from risk_engine.openai import (
@@ -45,6 +47,16 @@ from risk_engine.pipeline import AnalysisSource, ContextualRiskPipeline
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOGGER = StructuredAgentLogger()
+DEFAULT_PILOT_CONFIG_PATH = PROJECT_ROOT / "config" / "pilot-rollout.v1.json"
+RUNTIME_DATASET_VERSION = "runtime-observation-unapproved"
+
+
+def load_runtime_pilot_rollout(path: Path):
+    try:
+        return load_pilot_rollout(path)
+    except (OSError, ValueError):
+        AGENT_LOGGER.event("pilot_config_fail_safe", config_path=str(path))
+        return fail_safe_pilot_rollout()
 
 
 def apply_validated_policy(
@@ -334,6 +346,7 @@ def run_observer(args: argparse.Namespace) -> int:
     client = GuardianAPIClient(args.api_url)
     state_store = AgentStateStore(args.runtime_state_path)
     outbox = PersistentOutbox(args.outbox_path)
+    pilot_config = load_runtime_pilot_rollout(args.pilot_config_path)
     runtime_state = state_store.load()
     observer = MacOSObserver(
         change_threshold=args.change_threshold,
@@ -399,6 +412,17 @@ def run_observer(args: argparse.Namespace) -> int:
                     settings=settings,
                     fixture_input=False,
                 )
+                decision, pilot_decision = apply_pilot_rollout(
+                    decision,
+                    category=assessment.category,
+                    cohort_id=args.pilot_cohort_id,
+                    versions=VersionSet(
+                        model=pipeline_result.model_version,
+                        prompt=pipeline_result.prompt_version,
+                        dataset=RUNTIME_DATASET_VERSION,
+                    ),
+                    config=pilot_config,
+                )
                 telemetry = TelemetryUpdate(
                     child_id=args.child_id,
                     screen_changes=1,
@@ -428,8 +452,11 @@ def run_observer(args: argparse.Namespace) -> int:
                     category=assessment.category,
                     decision=decision.action,
                     application=application,
+                    pilot_rollout=pilot_decision.rollout_id,
+                    pilot_mode=pilot_decision.mode,
+                    simulated_action=pilot_decision.simulated_action,
                 )
-                if decision.action != "IGNORE":
+                if decision.action in {"ALERT", "BLOCK"}:
                     incident_payload = IncidentCreate(
                         child_id=args.child_id,
                         device_id=args.device_id,
@@ -569,6 +596,12 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=PROJECT_ROOT / ".data" / "outbox.json",
     )
+    observe.add_argument(
+        "--pilot-config-path",
+        type=Path,
+        default=DEFAULT_PILOT_CONFIG_PATH,
+    )
+    observe.add_argument("--pilot-cohort-id", default="pilot-technical")
     observe.add_argument("--openai-timeout", type=float, default=20)
     observe.add_argument("--minimum-interval", type=float, default=10)
     observe.add_argument("--maximum-interval", type=float, default=60)

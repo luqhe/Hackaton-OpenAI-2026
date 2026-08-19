@@ -139,6 +139,22 @@ def load_pilot_rollout(path: Path) -> PilotRolloutConfig:
     return PilotRolloutConfig.model_validate_json(path.read_text(encoding="utf-8"))
 
 
+def fail_safe_pilot_rollout() -> PilotRolloutConfig:
+    """Built-in state used when no trustworthy rollout configuration is available."""
+    return PilotRolloutConfig(
+        rollout_id="runtime-fail-safe",
+        mode=PilotMode.TECHNICAL_SHADOW,
+        cohort_ids=frozenset({"__fail_safe__"}),
+        kill_switches=(
+            PilotKillSwitch(
+                switch_id="runtime-fail-safe",
+                ceiling=EnforcementAction.LOG,
+                reason="No validated pilot rollout configuration is available",
+            ),
+        ),
+    )
+
+
 def _matching_alert_approval(
     config: PilotRolloutConfig,
     *,

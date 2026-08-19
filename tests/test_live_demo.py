@@ -370,9 +370,18 @@ def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp
     assert agent_main.run_observer(args) == 0
 
     assert events[:4] == ["capture", "active-app", "heartbeat", "assessment"]
-    assert client.incidents[0]["decision"]["action"] == "ALERT"
-    assert client.uploads[0][0] == "incident-live"
+    assert client.incidents == []
+    assert client.uploads == []
     assert enforcer.blocked == []
+
+
+def test_observe_uses_built_in_fail_safe_when_pilot_config_is_invalid(monkeypatch, tmp_path) -> None:
+    invalid = tmp_path / "invalid-pilot.json"
+    invalid.write_text("not-json", encoding="utf-8")
+    config = agent_main.load_runtime_pilot_rollout(invalid)
+
+    assert config.mode == "TECHNICAL_SHADOW"
+    assert config.kill_switches[0].ceiling == "LOG"
 
 
 def test_observe_command_skips_analysis_for_static_screen(monkeypatch, tmp_path) -> None:
@@ -428,7 +437,4 @@ def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monke
 
     assert agent_main.run_observer(args) == 0
 
-    assert [item.kind for item in PersistentOutbox(args.outbox_path).items()] == [
-        "TELEMETRY",
-        "INCIDENT",
-    ]
+    assert [item.kind for item in PersistentOutbox(args.outbox_path).items()] == ["TELEMETRY"]
