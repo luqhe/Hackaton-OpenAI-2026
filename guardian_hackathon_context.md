@@ -553,7 +553,8 @@ Priorizar ferramentas simples, conhecidas e rápidas de integrar:
 - **Risk engine:** heurísticas locais + modelo multimodal remoto somente para casos relevantes.
 - **Backend:** FastAPI.
 - **Database:** SQLite.
-- **Frontend:** Next.js + TypeScript.
+- **Frontend do MVP:** SPA responsiva em HTML/CSS/JavaScript servida pelo FastAPI.
+- **Frontend pós-hackathon:** Next.js + TypeScript, quando autenticação e deploy independente justificarem o segundo runtime.
 - **Persistência de evidência no MVP:** filesystem local + referência no banco.
 
 Não utilizar no hackathon:
@@ -593,6 +594,8 @@ block_application()
 unblock_application()
 ```
 
+No macOS, captura real depende da permissão **Screen Recording**. Identificação do app ativo e AppleScript podem exigir **Accessibility/Automation**. A demo oficial deve continuar funcionando com fixtures quando essas permissões não forem concedidas.
+
 ## 19. Context Buffer
 
 Manter aproximadamente os últimos **1–2 minutos** ou **5–10 observações significativas** de uma sessão/aplicativo.
@@ -604,11 +607,7 @@ Objetivo: permitir raciocínio temporal sem construir um arquivo permanente do u
 Interface única:
 
 ```python
-assess_risk(
-    policy,
-    recent_context,
-    current_observation
-) -> RiskAssessment
+assess_risk(current_observation) -> RiskAssessment
 ```
 
 Contrato congelado:
@@ -616,21 +615,22 @@ Contrato congelado:
 ```typescript
 type RiskAssessment = {
   risk: "SAFE" | "LOW" | "MEDIUM" | "HIGH";
-  category:
+  category: null |
     | "ADULT_CONTENT"
     | "HATE_SPEECH"
     | "DANGEROUS_CONTACT"
     | "OTHER";
-  direction:
+  direction: null |
     | "CONTENT_CONSUMPTION"
     | "CHILD_AS_TARGET"
     | "CHILD_AS_ACTOR";
   confidence: number;
   evidence: string[];
   explanation: string;
-  action: "IGNORE" | "LOG" | "BLOCK";
 };
 ```
+
+Para `risk = "SAFE"`, `category` e `direction` devem ser `null`. Para qualquer outro nível, ambas são obrigatórias. `confidence` deve estar entre `0` e `1`.
 
 ## 21. Deterministic Policy Engine
 
@@ -658,6 +658,18 @@ if (
 
 O modelo interpreta contexto. O software aplica a política definida pela família.
 
+O resultado da política usa um contrato separado:
+
+```typescript
+type PolicyDecision = {
+  action: "IGNORE" | "LOG" | "BLOCK";
+  matchedRule: PolicyRule | null;
+  reason: string;
+};
+```
+
+Isso impede que o classificador escolha diretamente uma ação sobre o dispositivo.
+
 ## 22. App Enforcer no macOS
 
 No hackathon, o enforcement pode ser simples:
@@ -674,6 +686,8 @@ se aplicativo continuar bloqueado
 ```
 
 Não construir MDM ou extensão de sistema sofisticada em 5 horas.
+
+Enforcement real deve ser opt-in e deny-by-default: somente aplicativos de demonstração presentes em uma allowlist explícita podem ser encerrados. Finder, Terminal, Ajustes do Sistema, processos de login e o próprio Guardian nunca podem ser bloqueados.
 
 ## 23. Incident Builder
 
@@ -692,7 +706,7 @@ Incident
 ├── confidence
 ├── explanation
 ├── evidence
-├── screenshot_paths
+├── screenshot_urls
 ├── relevant_transcript
 ├── triggered_policy
 ├── child_explanation
@@ -783,6 +797,8 @@ conservative local protection
 
 O produto não deve prometer paridade total de inteligência offline no MVP.
 
+Falhas técnicas são **fail-open para novas decisões**: timeout, backend indisponível ou saída inválida geram log e não iniciam um bloqueio novo. Um bloqueio já confirmado pode continuar sendo aplicado com a política em cache até receber um comando válido de desbloqueio.
+
 ## 26. Daily Aggregator
 
 Não utilizar AI quando uma agregação determinística resolve o problema.
@@ -821,15 +837,28 @@ POST   /devices/pair
 GET    /devices/:id/status
 ```
 
-No hackathon, implementar somente o necessário:
+No hackathon, o conjunto mínimo precisa fechar também a comunicação agente → API e API → agente:
 
 ```text
-GET  /incidents
-GET  /incidents/:id
-POST /incidents/:id/unlock
-POST /incidents/:id/request-unlock
-GET  /daily-report
+GET    /api/health
+POST   /api/incidents
+GET    /api/incidents
+GET    /api/incidents/:id
+POST   /api/incidents/:id/evidence
+GET    /api/evidence/:id
+POST   /api/incidents/:id/request-unlock
+POST   /api/incidents/:id/unlock
+POST   /api/incidents/:id/keep-blocked
+GET    /api/devices/:id/commands
+POST   /api/devices/:id/commands/:commandId/ack
+POST   /api/devices/:id/telemetry
+GET    /api/daily-report
+GET    /api/children/:id/policy
+PUT    /api/children/:id/policy
+POST   /api/devices/pair
 ```
+
+O agente consulta comandos pendentes por polling curto durante a demo. Autorizar um desbloqueio cria um comando persistente e idempotente, executado e confirmado pelo agente.
 
 ---
 
@@ -891,7 +920,7 @@ unblock_app()
 
 ## 30. Pessoa 2 — Risk Engine
 
-Ownership: `/risk-engine`
+Ownership: `/risk_engine`
 
 Entregas:
 
@@ -950,17 +979,20 @@ Telas:
 - `/child` — relatório diário + transparência.
 - `/settings` — políticas de proteção.
 
-Além disso, criar a experiência de aviso/bloqueio da criança. O frontend começa com mocks e troca para API real quando a integração estiver pronta.
+Além disso, criar a experiência de aviso/bloqueio da criança. Para reduzir o risco de integração no hackathon, a SPA é servida pelo FastAPI e consome `/api/*` na mesma origem.
 
 ## 33. Monorepo
 
 ```text
 guardian/
 ├── agent/
-├── risk-engine/
+├── risk_engine/
 ├── api/
+├── guardian_core/
 ├── web/
 ├── fixtures/
+├── tests/
+├── scripts/
 └── README.md
 ```
 

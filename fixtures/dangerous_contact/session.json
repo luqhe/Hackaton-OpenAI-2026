@@ -1,0 +1,33 @@
+{
+  "app_name": "Guardian Demo Chat",
+  "window_title": "Minecraft Builders — Direct message",
+  "visible_text": "A new contact is asking Lucas for personal information.",
+  "messages": [
+    {
+      "timestamp": "2026-08-19T14:01:00Z",
+      "speaker": "Alex",
+      "text": "hey, saw your Minecraft build"
+    },
+    {
+      "timestamp": "2026-08-19T14:03:00Z",
+      "speaker": "Alex",
+      "text": "how old are you?"
+    },
+    {
+      "timestamp": "2026-08-19T14:05:00Z",
+      "speaker": "Alex",
+      "text": "what school do you go to?"
+    },
+    {
+      "timestamp": "2026-08-19T14:07:00Z",
+      "speaker": "Alex",
+      "text": "send me your Instagram"
+    },
+    {
+      "timestamp": "2026-08-19T14:09:00Z",
+      "speaker": "Alex",
+      "text": "send me a picture"
+    }
+  ]
+}
+
