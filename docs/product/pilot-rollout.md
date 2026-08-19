@@ -20,3 +20,13 @@ configuração deve manter o último estado válido; sem estado válido, o compo
 
 O arquivo versionado é deliberadamente conservador e não constitui autorização jurídica,
 aprovação de Product Safety nem evidência de execução com famílias reais.
+
+## Fase 2 — alertas aprovados, sem bloqueio (R5-08)
+
+A promoção para `ALERT_ONLY` exige uma aprovação que identifique categoria, coorte, janela de shadow
+representativa e versões exatas de modelo, prompt e dataset. Os gates de eval e shadow, Product
+Safety e Engineering precisam estar todos aprovados. Mudança em qualquer versão invalida o gate.
+
+Nessa fase, uma decisão `BLOCK` aprovada produz no máximo `ALERT`. Categoria sem aprovação, coorte
+fora do escopo, versão divergente ou aprovação incompleta produz no máximo `LOG`. O baseline
+versionado mantém `alert_approvals=[]`; preencher a lista demanda evidência externa real e revisão.
