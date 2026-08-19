@@ -1,137 +1,163 @@
 # Guardian Android
 
-Native Android family client for Guardian on branch `agent/android-mobile-port`.
+Native Android **Family/Membership client** for the Guardian mobile branch.
 
-The Android application is deliberately a **review/control client**, not a second risk or enforcement agent. Context processing, provider calls, calibration, family policy, release gates, incidents, evidence, and host command execution remain in the shared Python backend.
+The app is written in Kotlin/Jetpack Compose and consumes the shared Guardian API. It is not a WebView and it is not the protected Device agent.
 
-## Stack
+## Responsibilities
 
-- Kotlin 2.3.21
+Android handles:
+
+- Account login and Family session state;
+- in-memory session/cookie + CSRF handling;
+- Family-scoped incident review;
+- unlock / keep-blocked decisions;
+- Child daily report and policy editing;
+- protected Device status display;
+- issuing short-lived Device pairing challenges;
+- explicit local synthetic demo mode.
+
+Android does **not** handle:
+
+- risk classification or calibration;
+- OpenAI/provider credentials;
+- screen observation or OCR;
+- Accessibility enforcement;
+- protected Device private/signing credentials;
+- `/api/agent/*` Device protocol execution.
+
+A protected Device is a separate identity. The family app can create its pairing code, but the Device generates its own key and receives/stores its own credential.
+
+## Specifications
+
+- Kotlin `2.3.21`
 - Jetpack Compose + Material 3
 - Compose BOM `2026.06.00`
-- Android Gradle Plugin 8.13.2
-- Gradle 8.13 in CI
+- Activity Compose `1.10.1`
+- Android Gradle Plugin `8.13.2`
+- Gradle `8.13` in CI
 - Java 17
-- `compileSdk` / `targetSdk` 36
-- `minSdk` 26
-- FastAPI Guardian backend
+- `compileSdk = 36`
+- `targetSdk = 36`
+- `minSdk = 26`
+- Application ID `com.guardian.mobile`
+- Version `0.1.0`
+- Permission: `INTERNET` only
 
-The app does not use a WebView and never stores `OPENAI_API_KEY`.
+Debug builds allow cleartext HTTP for local development. Release builds disable cleartext transport.
 
-## Mobile flows
+## Family authentication
 
-- Parent dashboard and daily metrics.
-- Incident review and evidence summary.
-- Unlock / keep-blocked decisions.
-- Child transparency view.
-- Family policy editor.
-- API connection settings.
-- Android device registration.
-- Conservative heartbeat for paired Android devices.
-- Backend capability disclosure.
+Normal mode uses the R2 session contract:
 
-## Android heartbeat
+1. `POST /api/auth/login`
+2. capture `guardian_session` and `guardian_csrf`
+3. send cookies on subsequent requests
+4. send `X-CSRF-Token` on mutations
+5. clear the session on logout/401
 
-The synchronized backend now exposes `POST /api/devices/:id/heartbeat`.
+The Android implementation deliberately keeps session cookies and the password in memory only. They are not written to `SharedPreferences`.
 
-After a phone is paired, the Android client uses it to update the device's `last_seen_at`. The payload intentionally reports the current implementation boundary:
+The persisted non-secret preferences are:
 
-```text
-screen recording permission: false
-Accessibility permission:    false
-observer healthy:             false
-offline queue depth:          0
+- API URL;
+- local-demo toggle;
+- selected Child ID;
+- last resolved Device ID.
+
+## Device pairing
+
+From an authenticated family session, Android can call:
+
+```http
+POST /api/pairing/challenges
 ```
 
-The legacy `device-demo` record is not heartbeated by Android because it represents the host-side demo agent.
+and display the returned short code. The protected Device separately completes:
 
-## Permissions
+```http
+POST /api/device/pair
+```
 
-The manifest requests only `INTERNET`.
+and then uses its signed `/api/agent/*` protocol. The Android family app never receives the Device secret.
 
-This port does not currently enable:
+## Recommended local demo
 
-- Accessibility Service;
-- MediaProjection / continuous Android screen capture;
-- microphone or camera;
-- Notification Listener;
-- Device Administrator / Device Owner;
-- real Android app blocking.
+The secure demo is explicit and loopback-only.
 
-Those capabilities require a separate Android architecture/release-gate decision.
+### 1. Start backend demo mode
 
-## Shared functionality inherited from `main`
-
-The mobile branch now tracks the current shared stack, including:
-
-- contextual risk contracts and R3 calibration/evaluation;
-- optional host-side OpenAI provider;
-- risk controls, frozen regression gates, and shadow-mode reports;
-- adaptive host observation and context buffering;
-- durable state, command recovery, offline outbox, heartbeat and diagnostics;
-- ephemeral evidence lifecycle;
-- native Swift ScreenCaptureKit/Vision helper;
-- macOS packaging and E2E checks.
-
-These are shared/backend or host/macOS features. They do not grant equivalent permissions to Android.
-
-## Deterministic local demo
-
-Start the backend:
+macOS/Linux:
 
 ```bash
-bash scripts/bootstrap.sh
-bash scripts/run-api.sh
+bash scripts/run-mobile-demo-api.sh
 ```
 
-Run Guardian on an Android Emulator. The default API URL is:
+Windows:
 
-```text
-http://10.0.2.2:8000
+```powershell
+.\scripts\run-mobile-demo-api.ps1
 ```
 
-Build with Android Studio or:
+### 2. Forward Android localhost
+
+```bash
+adb reverse tcp:8000 tcp:8000
+```
+
+### 3. Run Android
+
+Build from Android Studio or:
 
 ```bash
 gradle :android-app:assembleDebug
 ```
 
-Keep `device-demo` selected for the canned fixture flow, then run:
-
-```bash
-bash scripts/run-demo.sh
-```
-
-Refresh **Início**, open the incident, and make the parent decision. Unlocking should eventually produce a host-agent line similar to:
+In **Configuração** use:
 
 ```text
-unlocked=Guardian Demo Chat command=<id>
+API URL: http://127.0.0.1:8000
+Modo de demonstração local: ON
+Child ID: child-demo
 ```
 
-## Optional host visual/continuous paths
+Use `device-demo` for the canned fixture flow.
 
-The synchronized repository also has macOS host observation paths, including `run-live-demo.sh` and `agent.main observe`.
+### 4. Trigger the fixture
 
-Android can review incidents created by those paths, but the phone does not perform their screen capture or provider calls.
-
-## Physical device
-
-Bind FastAPI to a LAN interface:
+macOS/Linux:
 
 ```bash
-.venv/bin/python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
+bash scripts/run-mobile-demo.sh
 ```
 
-Then configure **Conexão** with the host LAN address, for example:
+Windows:
 
-```text
-http://192.168.1.50:8000
+```powershell
+.\scripts\run-mobile-demo.ps1
 ```
 
-Debug builds allow local cleartext HTTP. Release builds require HTTPS.
+Refresh the Android dashboard, open the incident, and choose unlock or keep blocked.
 
-For the full setup and demo workflow, see:
+The server and fixture launcher both set `GUARDIAN_DEMO_MODE=true`. The Android toggle adds `X-Guardian-Demo: true`. The backend still validates that this is a development/test, local-transport request.
 
-- [`../README.md`](../README.md)
-- [`../docs/product/mobile-demo-runbook.md`](../docs/product/mobile-demo-runbook.md)
-- [`../docs/adr/0005-android-mobile-client.md`](../docs/adr/0005-android-mobile-client.md)
+## Normal/non-demo use
+
+Disable demo mode and configure the real API URL. For non-local deployments use HTTPS.
+
+An existing Account/Membership must already be provisioned server-side. Login with email/password and optionally `family_id`, then configure the Child ID belonging to that Family.
+
+## Android permissions
+
+This module intentionally does not request:
+
+- screen capture;
+- Accessibility;
+- microphone;
+- camera;
+- notification access;
+- Device Admin / Device Owner.
+
+Those would belong to a future Android protected-device agent and require a separate ADR/release gate.
+
+See the full branch guide in [`../README.md`](../README.md) and the mobile demo runbook in [`../docs/product/mobile-demo-runbook.md`](../docs/product/mobile-demo-runbook.md).
