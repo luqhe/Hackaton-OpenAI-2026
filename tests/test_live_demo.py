@@ -301,3 +301,60 @@ def test_parser_exposes_the_documented_live_demo_contract() -> None:
     assert args.handler is agent_main.run_live_demo
     assert args.controlled_demo is True
     assert args.wait_for_unlock is True
+
+
+def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp_path) -> None:
+    events = []
+    client = FakeClient(events)
+    enforcer = FakeEnforcer(events)
+    settings = development_settings(tmp_path)
+
+    class LoopObserver:
+        def capture_if_changed(self, destination):
+            Image.new("RGB", (8, 8), color="white").save(destination)
+            events.append("capture")
+            return destination, "perceptual-hash"
+
+        def get_active_application(self):
+            events.append("active-app")
+            return "Guardian Demo Chat"
+
+    monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: LoopObserver())
+    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: client)
+    monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: enforcer)
+    monkeypatch.setattr(
+        agent_main,
+        "assess_screenshot",
+        lambda *args, **kwargs: events.append("assessment") or high_assessment(),
+    )
+    args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])
+    args.state_path = tmp_path / "agent-state.json"
+
+    assert agent_main.run_observer(args) == 0
+
+    assert events[:3] == ["capture", "active-app", "assessment"]
+    assert client.incidents[0]["decision"]["action"] == "ALERT"
+    assert client.uploads[0][0] == "incident-live"
+    assert enforcer.blocked == []
+
+
+def test_observe_command_skips_analysis_for_static_screen(monkeypatch, tmp_path) -> None:
+    settings = development_settings(tmp_path)
+
+    class StaticObserver:
+        def capture_if_changed(self, destination):
+            return None
+
+    monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: StaticObserver())
+    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: FakeClient([]))
+    monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: FakeEnforcer([]))
+    monkeypatch.setattr(
+        agent_main,
+        "assess_screenshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("static screen must be ignored")),
+    )
+    args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])
+
+    assert agent_main.run_observer(args) == 0

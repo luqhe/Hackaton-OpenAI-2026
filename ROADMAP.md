@@ -148,7 +148,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 
 ## Épico 1.3 — Enforcement e ciclo de vida
 
-- [ ] `R1-15` Integrar observer real ao `agent.main`.
+- [x] `R1-15` Integrar observer real ao `agent.main`.
 - [ ] `R1-16` Executar a política somente após validação do assessment.
 - [ ] `R1-17` Implementar monitor de reabertura de app bloqueado.
 - [ ] `R1-18` Preservar denylist permanente de processos essenciais.

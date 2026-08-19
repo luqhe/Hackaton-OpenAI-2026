@@ -9,9 +9,11 @@ from collections.abc import Sequence
 from pathlib import Path
 
 from agent.client import GuardianAPIClient, GuardianAPIError
+from agent.context import ObservationContextBuffer
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
 from agent.evidence import EphemeralCapture, build_minimal_png
-from agent.observer import MacOSObserver
+from agent.observer import MacOSObserver, ObserverPermissionError
+from agent.scheduler import AdaptiveObservationSchedule
 from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
 from guardian_core.models import IncidentCreate, Observation, PolicyRule, TelemetryUpdate
@@ -192,6 +194,80 @@ def run_live_demo(args: argparse.Namespace) -> int:
         temporary_capture.delete()
 
 
+def run_observer(args: argparse.Namespace) -> int:
+    """Run the adaptive real-screen observation loop on macOS."""
+    settings = GuardianSettings.from_env()
+    client = GuardianAPIClient(args.api_url)
+    observer = MacOSObserver(change_threshold=args.change_threshold)
+    enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
+    context = ObservationContextBuffer()
+    schedule = AdaptiveObservationSchedule(
+        minimum_seconds=args.minimum_interval,
+        maximum_seconds=args.maximum_interval,
+        backoff_factor=args.backoff_factor,
+    )
+    cycle = 0
+
+    while args.max_cycles == 0 or cycle < args.max_cycles:
+        cycle += 1
+        with EphemeralCapture.create() as capture:
+            captured = observer.capture_if_changed(capture.path)
+            if captured is None:
+                next_interval = schedule.report_observation(changed=False)
+                print(f"observation=STATIC next_in={next_interval:.1f}")
+            else:
+                screenshot_path, screen_hash = captured
+                application = observer.get_active_application()
+                observation = Observation(app_name=application, screen_hash=screen_hash)
+                context.add(observation, session_id=args.session_id)
+                assessment = assess_screenshot(
+                    screenshot_path,
+                    observation,
+                    timeout=args.openai_timeout,
+                )
+                rules = [PolicyRule.model_validate(item) for item in client.get_policy(args.child_id)]
+                decision = apply_policy(assessment, rules)
+                decision = apply_runtime_release_gate(decision, settings, fixture_input=False)
+                client.record_telemetry(
+                    args.device_id,
+                    TelemetryUpdate(
+                        child_id=args.child_id,
+                        screen_changes=1,
+                        suspicious_events=1 if assessment.risk != "SAFE" else 0,
+                        app_name=application,
+                    ).model_dump(mode="json"),
+                )
+                print(
+                    f"source=OPENAI risk={assessment.risk} category={assessment.category} "
+                    f"confidence={assessment.confidence:.2f} decision={decision.action}"
+                )
+                if decision.action != "IGNORE":
+                    incident = client.create_incident(
+                        IncidentCreate(
+                            child_id=args.child_id,
+                            device_id=args.device_id,
+                            application=application,
+                            occurred_at=observation.timestamp,
+                            assessment=assessment,
+                            decision=decision,
+                            deduplication_key=hashlib.sha256(
+                                f"{args.device_id}|{application}|{screen_hash}".encode()
+                            ).hexdigest(),
+                        ).model_dump(mode="json")
+                    )
+                    client.upload_png_evidence(incident["id"], build_minimal_png(screenshot_path))
+                    if decision.action == "BLOCK":
+                        enforcer.block(application)
+                    print(f"incident={incident['id']} status={incident['status']}")
+                next_interval = schedule.report_observation(changed=True)
+
+        if args.max_cycles and cycle >= args.max_cycles:
+            return 0
+        time.sleep(next_interval)
+
+    return 0
+
+
 def poll_commands(
     client: GuardianAPIClient,
     device_id: str,
@@ -261,6 +337,29 @@ def build_parser() -> argparse.ArgumentParser:
     live_demo.add_argument("--real-enforcement", action="store_true")
     live_demo.set_defaults(handler=run_live_demo)
 
+    observe = subparsers.add_parser(
+        "observe",
+        help="Continuously observe meaningful macOS screen changes",
+    )
+    observe.add_argument("--api-url", default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"))
+    observe.add_argument("--child-id", default="child-demo")
+    observe.add_argument("--device-id", default="device-demo")
+    observe.add_argument("--session-id", default="interactive")
+    observe.add_argument("--state-path", type=Path, default=PROJECT_ROOT / ".data" / "agent-state.json")
+    observe.add_argument("--openai-timeout", type=float, default=20)
+    observe.add_argument("--minimum-interval", type=float, default=10)
+    observe.add_argument("--maximum-interval", type=float, default=60)
+    observe.add_argument("--backoff-factor", type=float, default=1.5)
+    observe.add_argument("--change-threshold", type=int, default=8)
+    observe.add_argument(
+        "--max-cycles",
+        type=int,
+        default=0,
+        help="Stop after N capture cycles; zero keeps observing",
+    )
+    observe.add_argument("--real-enforcement", action="store_true")
+    observe.set_defaults(handler=run_observer)
+
     poll = subparsers.add_parser("poll", help="Poll and execute pending device commands")
     poll.add_argument("--api-url", default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"))
     poll.add_argument("--device-id", default="device-demo")
@@ -284,7 +383,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     try:
         return args.handler(args)
-    except (GuardianAPIError, OpenAIRiskError, OSError, ValueError) as error:
+    except (GuardianAPIError, ObserverPermissionError, OpenAIRiskError, OSError, ValueError) as error:
         print(f"Guardian agent error: {error}")
         return 1
     except KeyboardInterrupt:
