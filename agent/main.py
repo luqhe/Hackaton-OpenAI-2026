@@ -16,6 +16,7 @@ from agent.observer import MacOSObserver, ObserverPermissionError
 from agent.outbox import OutboxItem, PersistentOutbox
 from agent.scheduler import AdaptiveObservationSchedule
 from agent.state import AgentStateStore
+from agent.structured_log import StructuredAgentLogger
 from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
 from guardian_core.models import (
@@ -33,6 +34,7 @@ from risk_engine import assess_risk
 from risk_engine.openai import OpenAIRiskError, assess_screenshot
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+AGENT_LOGGER = StructuredAgentLogger()
 
 
 def apply_validated_policy(
@@ -75,6 +77,7 @@ def record_telemetry_or_queue(
         client.record_telemetry(device_id, payload)
     except GuardianAPIError:
         item = outbox.enqueue("TELEMETRY", device_id, payload)
+        AGENT_LOGGER.event("offline_queue_added", kind="TELEMETRY", item_id=item.id)
         print(f"offline_queue=TELEMETRY id={item.id}")
 
 
@@ -88,6 +91,7 @@ def create_incident_or_queue(
         return client.create_incident(payload)
     except GuardianAPIError:
         item = outbox.enqueue("INCIDENT", device_id, payload)
+        AGENT_LOGGER.event("offline_queue_added", kind="INCIDENT", item_id=item.id)
         print(f"offline_queue=INCIDENT id={item.id}")
         return None
 
@@ -357,6 +361,13 @@ def run_observer(args: argparse.Namespace) -> int:
                     f"source=OPENAI risk={assessment.risk} category={assessment.category} "
                     f"confidence={assessment.confidence:.2f} decision={decision.action}"
                 )
+                AGENT_LOGGER.event(
+                    "observation_assessed",
+                    risk=assessment.risk,
+                    category=assessment.category,
+                    decision=decision.action,
+                    application=application,
+                )
                 if decision.action != "IGNORE":
                     incident_payload = IncidentCreate(
                         child_id=args.child_id,
@@ -533,6 +544,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         return args.handler(args)
     except (GuardianAPIError, ObserverPermissionError, OpenAIRiskError, OSError, ValueError) as error:
+        AGENT_LOGGER.event("agent_error", level="ERROR", error_type=type(error).__name__)
         print(f"Guardian agent error: {error}")
         return 1
     except KeyboardInterrupt:
