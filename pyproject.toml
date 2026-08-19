@@ -16,9 +16,12 @@ dev = [
   "ruff>=0.12,<1",
 ]
 
+[tool.setuptools.packages.find]
+include = ["agent*", "api*", "guardian_core*", "risk_engine*"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-q -p no:cacheprovider --basetemp=.test-runtime/run"
+addopts = "-q -p no:cacheprovider --basetemp=.test-runtime"
 
 [tool.ruff]
 target-version = "py311"
