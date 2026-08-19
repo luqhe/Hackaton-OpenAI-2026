@@ -177,6 +177,17 @@ class Device(BaseModel):
     protection_status: str
 
 
+class DeviceHeartbeat(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    agent_version: str = Field(min_length=1, max_length=40)
+    screen_recording_permission: bool
+    accessibility_permission: bool
+    observer_healthy: bool
+    offline_queue_depth: Annotated[int, Field(ge=0, le=1000)] = 0
+    observed_at: datetime = Field(default_factory=utc_now)
+
+
 class DeviceCommand(BaseModel):
     id: int
     device_id: str

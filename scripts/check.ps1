@@ -2,16 +2,30 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 
-& ".\.venv\Scripts\python.exe" scripts\validate_stage0.py
-& ".\.venv\Scripts\python.exe" scripts\run_r3_evals.py --check
-& ".\.venv\Scripts\python.exe" -m ruff check .
-& ".\.venv\Scripts\python.exe" -m ruff format --check agent api guardian_core risk_engine scripts tests
-& ".\.venv\Scripts\python.exe" -m pytest
+function Invoke-CheckedCommand {
+    param(
+        [Parameter(Mandatory = $true)][string]$Command,
+        [Parameter(Mandatory = $true)][string[]]$Arguments
+    )
+    & $Command @Arguments
+    if ($LASTEXITCODE -ne 0) {
+        throw "Command failed with exit code ${LASTEXITCODE}: $Command $($Arguments -join ' ')"
+    }
+}
+
+$python = ".\.venv\Scripts\python.exe"
+Invoke-CheckedCommand $python @("scripts\validate_stage0.py")
+Invoke-CheckedCommand $python @("scripts\run_r3_evals.py", "--check")
+Invoke-CheckedCommand $python @("-m", "ruff", "check", ".")
+Invoke-CheckedCommand $python @(
+    "-m", "ruff", "format", "--check", "agent", "api", "guardian_core", "risk_engine", "scripts", "tests"
+)
+Invoke-CheckedCommand $python @("-m", "pytest")
 
 $pnpm = Get-Command pnpm -ErrorAction SilentlyContinue
 if (-not $pnpm) {
     throw "pnpm não encontrado. Instale pnpm 11 para validar a interface."
 }
-& $pnpm.Source check:js
-& $pnpm.Source lint:js
-& $pnpm.Source format:check
+Invoke-CheckedCommand $pnpm.Source @("check:js")
+Invoke-CheckedCommand $pnpm.Source @("lint:js")
+Invoke-CheckedCommand $pnpm.Source @("format:check")

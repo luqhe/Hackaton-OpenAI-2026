@@ -1,19 +1,25 @@
 from datetime import UTC, datetime
+from io import BytesIO
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 import agent.client as client_module
 import agent.main as agent_main
-from agent.client import GuardianAPIClient
+from agent.client import GuardianAPIClient, GuardianAPIError
+from agent.outbox import PersistentOutbox
+from agent.state import AgentStateStore
 from api.main import create_app
 from guardian_core.config import Environment, GuardianSettings, LogLevel
 from guardian_core.models import RiskAssessment
 from risk_engine.openai import OpenAIRiskError
 
-PNG = b"\x89PNG\r\n\x1a\ncontrolled-demo"
+PNG_BUFFER = BytesIO()
+Image.new("RGB", (8, 8), color="white").save(PNG_BUFFER, format="PNG")
+PNG = PNG_BUFFER.getvalue()
 
 
 def development_settings(tmp_path: Path, environment: Environment = Environment.DEVELOPMENT):
@@ -87,6 +93,10 @@ class FakeClient:
     def record_telemetry(self, device_id, payload):
         self.events.append("telemetry")
         self.telemetry.append((device_id, payload))
+
+    def record_heartbeat(self, device_id, payload):
+        self.events.append("heartbeat")
+        return {"id": device_id, "protection_status": "PROTECTED"}
 
     def create_incident(self, payload):
         self.events.append("incident")
@@ -178,7 +188,9 @@ def test_live_demo_captures_assesses_uploads_then_blocks(monkeypatch, tmp_path, 
     assert "parent_view=http://testserver/incidents/incident-live" in output
     assert events.index("incident") < events.index("upload") < events.index("block")
     assert enforcer.blocked == ["Guardian Demo Chat"]
-    assert client.uploads == [("incident-live", PNG)]
+    assert client.uploads[0][0] == "incident-live"
+    with Image.open(BytesIO(client.uploads[0][1])) as uploaded_image:
+        assert uploaded_image.size == (8, 8)
     assert client.incidents[0]["assessment"]["risk"] == "HIGH"
     assert "action" not in client.incidents[0]["assessment"]
     assert observer.screenshot_path is not None
@@ -217,6 +229,31 @@ def test_remote_failure_returns_nonzero_without_incident_or_block(monkeypatch, t
     assert not observer.screenshot_path.exists()
 
 
+def test_invalid_assessment_is_rejected_before_policy(monkeypatch, tmp_path) -> None:
+    events, observer, client, enforcer = configure_live_fakes(monkeypatch, tmp_path, high_assessment())
+    monkeypatch.setattr(
+        agent_main,
+        "assess_screenshot",
+        lambda *args, **kwargs: {
+            "risk": "HIGH",
+            "category": "DANGEROUS_CONTACT",
+            "direction": "CHILD_AS_TARGET",
+            "confidence": 0.99,
+            "evidence": [],
+            "explanation": "invalid because action is classifier-owned",
+            "action": "BLOCK",
+        },
+    )
+
+    with pytest.raises(ValueError, match="action"):
+        agent_main.run_live_demo(live_args(tmp_path))
+
+    assert "policy" not in events
+    assert client.incidents == []
+    assert enforcer.blocked == []
+    assert not observer.screenshot_path.exists()
+
+
 def test_controlled_demo_is_rejected_outside_development(monkeypatch, tmp_path) -> None:
     settings = development_settings(tmp_path, Environment.TEST)
     monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
@@ -234,15 +271,16 @@ def test_wait_for_unlock_reuses_existing_polling(monkeypatch, tmp_path) -> None:
     _, observer, client, enforcer = configure_live_fakes(monkeypatch, tmp_path, high_assessment())
     polling = []
 
-    def poll(*args):
+    def poll(*args, **kwargs):
         assert not observer.screenshot_path.exists()
-        polling.append(args)
+        polling.append((args, kwargs))
 
     monkeypatch.setattr(agent_main, "poll_commands", poll)
 
     assert agent_main.run_live_demo(live_args(tmp_path, wait_for_unlock=True)) == 0
 
-    assert polling == [(client, "device-demo", enforcer, 0)]
+    assert polling[0][0] == (client, "device-demo", enforcer, 0)
+    assert isinstance(polling[0][1]["state_store"], AgentStateStore)
 
 
 def test_png_client_uses_image_content_type(monkeypatch) -> None:
@@ -295,3 +333,100 @@ def test_parser_exposes_the_documented_live_demo_contract() -> None:
     assert args.handler is agent_main.run_live_demo
     assert args.controlled_demo is True
     assert args.wait_for_unlock is True
+
+
+def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp_path) -> None:
+    events = []
+    client = FakeClient(events)
+    enforcer = FakeEnforcer(events)
+    settings = development_settings(tmp_path)
+
+    class LoopObserver:
+        def capture_if_changed(self, destination):
+            Image.new("RGB", (8, 8), color="white").save(destination)
+            events.append("capture")
+            return destination, "perceptual-hash"
+
+        def get_active_application(self):
+            events.append("active-app")
+            return "Guardian Demo Chat"
+
+    monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: LoopObserver())
+    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: client)
+    monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: enforcer)
+    monkeypatch.setattr(
+        agent_main,
+        "assess_screenshot",
+        lambda *args, **kwargs: events.append("assessment") or high_assessment(),
+    )
+    args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])
+    args.state_path = tmp_path / "agent-state.json"
+    args.runtime_state_path = tmp_path / "runtime-state.json"
+    args.outbox_path = tmp_path / "outbox.json"
+
+    assert agent_main.run_observer(args) == 0
+
+    assert events[:4] == ["capture", "active-app", "heartbeat", "assessment"]
+    assert client.incidents[0]["decision"]["action"] == "ALERT"
+    assert client.uploads[0][0] == "incident-live"
+    assert enforcer.blocked == []
+
+
+def test_observe_command_skips_analysis_for_static_screen(monkeypatch, tmp_path) -> None:
+    settings = development_settings(tmp_path)
+
+    class StaticObserver:
+        def capture_if_changed(self, destination):
+            return None
+
+    monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: StaticObserver())
+    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: FakeClient([]))
+    monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: FakeEnforcer([]))
+    monkeypatch.setattr(
+        agent_main,
+        "assess_screenshot",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("static screen must be ignored")),
+    )
+    args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])
+    args.runtime_state_path = tmp_path / "runtime-state.json"
+    args.outbox_path = tmp_path / "outbox.json"
+
+    assert agent_main.run_observer(args) == 0
+
+
+def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monkeypatch, tmp_path) -> None:
+    events = []
+    settings = development_settings(tmp_path)
+
+    class OfflineClient(FakeClient):
+        def record_telemetry(self, device_id, payload):
+            raise GuardianAPIError("offline")
+
+        def create_incident(self, payload):
+            raise GuardianAPIError("offline")
+
+    class LoopObserver:
+        def capture_if_changed(self, destination):
+            Image.new("RGB", (8, 8), color="white").save(destination)
+            return destination, "offline-hash"
+
+        def get_active_application(self):
+            return "Guardian Demo Chat"
+
+    monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
+    monkeypatch.setattr(agent_main, "MacOSObserver", lambda **kwargs: LoopObserver())
+    monkeypatch.setattr(agent_main, "GuardianAPIClient", lambda api_url: OfflineClient(events))
+    monkeypatch.setattr(agent_main, "build_enforcer", lambda *args: FakeEnforcer(events))
+    monkeypatch.setattr(agent_main, "assess_screenshot", lambda *args, **kwargs: high_assessment())
+    args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])
+    args.runtime_state_path = tmp_path / "runtime-state.json"
+    args.outbox_path = tmp_path / "outbox.json"
+
+    assert agent_main.run_observer(args) == 0
+
+    assert [item.kind for item in PersistentOutbox(args.outbox_path).items()] == [
+        "TELEMETRY",
+        "INCIDENT",
+    ]
