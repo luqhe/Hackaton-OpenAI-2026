@@ -60,3 +60,15 @@ def test_pilot_telemetry_outbox_rejects_content_fields(tmp_path) -> None:
         {"agent_version": "0.1.0", "permission_state": "GRANTED"},
     )
     assert item.payload == {"agent_version": "0.1.0", "permission_state": "GRANTED"}
+
+
+def test_persisted_pilot_telemetry_is_revalidated_before_delivery(tmp_path) -> None:
+    path = tmp_path / "outbox.json"
+    path.write_text(
+        '[{"id":"1","kind":"PILOT_TELEMETRY","device_id":"device-demo",'
+        '"payload":{"agent_version":"0.1.0","visible_text":"private"},'
+        '"created_at":"2026-08-20T00:00:00+00:00","attempts":0}]',
+        encoding="utf-8",
+    )
+
+    assert PersistentOutbox(path).items() == ()

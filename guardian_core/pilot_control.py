@@ -216,16 +216,46 @@ class PilotConfigStore:
     @contextmanager
     def _exclusive_lock(self):
         self.state_directory.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+b")
         try:
-            descriptor = os.open(self.lock_path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        except FileExistsError as error:
-            raise PilotConcurrentUpdateError("Pilot controls are being updated concurrently") from error
-        try:
-            os.write(descriptor, str(os.getpid()).encode("ascii"))
+            self._lock_handle(handle)
             yield
         finally:
-            os.close(descriptor)
-            self.lock_path.unlink(missing_ok=True)
+            self._unlock_handle(handle)
+            handle.close()
+
+    @staticmethod
+    def _lock_handle(handle) -> None:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                if handle.seek(0, 2) == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            handle.close()
+            raise PilotConcurrentUpdateError("Pilot controls are being updated concurrently") from error
+
+    @staticmethod
+    def _unlock_handle(handle) -> None:
+        if handle.closed:
+            return
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
 
     def _apply_transaction(self, updates: list[tuple[Path, str]]) -> None:
         originals = {path: path.read_bytes() if path.exists() else None for path, _ in updates}

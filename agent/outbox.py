@@ -39,7 +39,18 @@ class PersistentOutbox:
             return ()
         try:
             payload = json.loads(self.path.read_text(encoding="utf-8"))
-            return tuple(OutboxItem(**item) for item in payload)
+            items: list[OutboxItem] = []
+            for raw_item in payload:
+                item = OutboxItem(**raw_item)
+                if item.kind not in {"INCIDENT", "TELEMETRY", "PILOT_TELEMETRY"}:
+                    raise ValueError("unsupported outbox kind")
+                if item.kind == "PILOT_TELEMETRY":
+                    validated = PilotTechnicalTelemetry.model_validate(item.payload).model_dump(
+                        mode="json", exclude_none=True
+                    )
+                    item = replace(item, payload=validated)
+                items.append(item)
+            return tuple(items)
         except (OSError, TypeError, ValueError, json.JSONDecodeError):
             return ()
 
