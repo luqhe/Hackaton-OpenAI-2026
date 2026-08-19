@@ -1,0 +1,21 @@
+{
+  "schema_version": 1,
+  "roadmap_id": "R5-04",
+  "timezone": "America/Sao_Paulo",
+  "roster_active": false,
+  "required_roles": [
+    "PRIMARY",
+    "SECONDARY",
+    "SECURITY",
+    "PRIVACY"
+  ],
+  "rotations": [],
+  "escalation_targets_minutes": {
+    "SEV0_PRIMARY": 5,
+    "SEV0_SECONDARY": 10,
+    "SEV1_PRIMARY": 15,
+    "SEV1_SECONDARY": 30
+  },
+  "last_drill_at": null,
+  "last_drill_result": null
+}

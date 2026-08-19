@@ -1,0 +1,70 @@
+{
+  "schema_version": 1,
+  "roadmap_id": "R5-04",
+  "alerts_active": false,
+  "rules": [
+    {
+      "id": "PILOT-ALERT-PRIVACY-CROSS-FAMILY",
+      "metric": "cross_family_access_events",
+      "operator": "GT",
+      "threshold": 0,
+      "severity": "SEV0",
+      "consecutive_windows": 1,
+      "action": "STOP_ALL_COLLECTION_AND_PAGE_SECURITY_PRIVACY"
+    },
+    {
+      "id": "PILOT-ALERT-PROHIBITED-COLLECTION",
+      "metric": "prohibited_collection_events",
+      "operator": "GT",
+      "threshold": 0,
+      "severity": "SEV0",
+      "consecutive_windows": 1,
+      "action": "STOP_ALL_COLLECTION_AND_PAGE_SECURITY_PRIVACY"
+    },
+    {
+      "id": "PILOT-ALERT-API-AVAILABILITY",
+      "metric": "api_availability_percent",
+      "operator": "LT",
+      "threshold": 99.5,
+      "severity": "SEV1",
+      "consecutive_windows": 2,
+      "action": "PAUSE_COHORT_AND_KEEP_SHADOW_ONLY"
+    },
+    {
+      "id": "PILOT-ALERT-COMMAND-ACK-P95",
+      "metric": "command_ack_latency_p95_ms",
+      "operator": "GT",
+      "threshold": 5000,
+      "severity": "SEV1",
+      "consecutive_windows": 2,
+      "action": "DISABLE_INTERVENTIONS_AND_PRIORITIZE_UNLOCK"
+    },
+    {
+      "id": "PILOT-ALERT-HEARTBEAT-STALE",
+      "metric": "heartbeat_age_max_seconds",
+      "operator": "GT",
+      "threshold": 90,
+      "severity": "SEV2",
+      "consecutive_windows": 2,
+      "action": "MARK_DEVICE_DEGRADED_AND_NOTIFY_SUPPORT"
+    },
+    {
+      "id": "PILOT-ALERT-OFFLINE-QUEUE",
+      "metric": "offline_queue_depth_max",
+      "operator": "GT",
+      "threshold": 100,
+      "severity": "SEV2",
+      "consecutive_windows": 2,
+      "action": "INVESTIGATE_AGENT_CONNECTIVITY"
+    },
+    {
+      "id": "PILOT-ALERT-DELETION-FAILURE",
+      "metric": "family_deletion_failures",
+      "operator": "GT",
+      "threshold": 0,
+      "severity": "SEV1",
+      "consecutive_windows": 1,
+      "action": "PAUSE_NEW_ENROLLMENT_AND_PAGE_PRIVACY_ENGINEERING"
+    }
+  ]
+}

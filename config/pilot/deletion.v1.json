@@ -1,0 +1,31 @@
+{
+  "schema_version": 1,
+  "roadmap_id": "R5-06",
+  "local_mvp_scope_verified": true,
+  "pilot_scope_verified": false,
+  "verified_stores": [
+    "SQLITE_CONTROL_PLANE",
+    "LOCAL_EVIDENCE_FILESYSTEM"
+  ],
+  "verified_entities": [
+    "FAMILY",
+    "CHILDREN",
+    "DEVICES",
+    "POLICIES",
+    "INCIDENTS",
+    "EVIDENCE",
+    "COMMANDS",
+    "APP_SESSIONS",
+    "DAILY_TELEMETRY",
+    "ONBOARDING_EVENTS",
+    "AGENT_HEALTH_SAMPLES"
+  ],
+  "unresolved_pilot_stores": [
+    "MANAGED_BACKUPS",
+    "OBJECT_STORAGE_AND_REPLICAS",
+    "DEVICE_LOCAL_STATE_AND_OUTBOX",
+    "EXTERNAL_ANALYTICS_AND_ALERTING",
+    "AUDIT_RETENTION_POLICY"
+  ],
+  "automated_proof": "tests/test_family_deletion.py"
+}

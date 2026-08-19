@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from enum import StrEnum
 from typing import Annotated
 
@@ -88,6 +88,25 @@ class CommandStatus(StrEnum):
     ACKNOWLEDGED = "ACKNOWLEDGED"
     EXPIRED = "EXPIRED"
     FAILED = "FAILED"
+
+
+class FamilyDeletionStatus(StrEnum):
+    STARTED = "STARTED"
+    DATABASE_DELETED = "DATABASE_DELETED"
+    COMPLETED = "COMPLETED"
+    FAILED_DATABASE = "FAILED_DATABASE"
+    FAILED_STORAGE_CLEANUP = "FAILED_STORAGE_CLEANUP"
+
+
+class PilotOnboardingStage(StrEnum):
+    STARTED = "STARTED"
+    PRIVACY_REVIEWED = "PRIVACY_REVIEWED"
+    CONSENT_RECORDED = "CONSENT_RECORDED"
+    CHILD_PROFILE_CONFIGURED = "CHILD_PROFILE_CONFIGURED"
+    DEVICE_PAIRED = "DEVICE_PAIRED"
+    PERMISSIONS_GRANTED = "PERMISSIONS_GRANTED"
+    FIRST_HEALTHY_HEARTBEAT = "FIRST_HEALTHY_HEARTBEAT"
+    SHADOW_READY = "SHADOW_READY"
 
 
 class ConversationMessage(BaseModel):
@@ -218,6 +237,103 @@ class DeviceHeartbeat(BaseModel):
     observer_healthy: bool
     offline_queue_depth: Annotated[int, Field(ge=0, le=1000)] = 0
     observed_at: datetime = Field(default_factory=utc_now)
+
+    @model_validator(mode="after")
+    def validate_observed_at(self) -> DeviceHeartbeat:
+        if self.observed_at.utcoffset() is None:
+            raise ValueError("Heartbeat observed_at must include a timezone")
+        if self.observed_at > utc_now() + timedelta(seconds=30):
+            raise ValueError("Heartbeat observed_at exceeds the 30-second clock-skew allowance")
+        return self
+
+
+class PilotOnboardingEventCreate(BaseModel):
+    """Allowlisted funnel event. It intentionally has no arbitrary metadata/content field."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    child_id: str = Field(min_length=1, max_length=100)
+    device_id: str | None = Field(default=None, min_length=1, max_length=100)
+    session_id: str = Field(min_length=8, max_length=128)
+    stage: PilotOnboardingStage
+    occurred_at: datetime = Field(default_factory=utc_now)
+    idempotency_key: str = Field(min_length=8, max_length=128)
+
+    @model_validator(mode="after")
+    def validate_occurred_at(self) -> PilotOnboardingEventCreate:
+        if self.occurred_at.utcoffset() is None:
+            raise ValueError("Onboarding occurred_at must include a timezone")
+        if self.occurred_at > utc_now() + timedelta(seconds=30):
+            raise ValueError("Onboarding occurred_at exceeds the 30-second clock-skew allowance")
+        return self
+
+
+class PilotOnboardingEvent(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    child_id: str
+    device_id: str | None
+    session_id: str
+    stage: PilotOnboardingStage
+    occurred_at: datetime
+    created_at: datetime
+
+
+class PilotFunnelStageMetric(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    stage: PilotOnboardingStage
+    event_count: int
+    unique_sessions: int
+
+
+class PilotMetricsReport(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    window_started_at: datetime
+    generated_at: datetime
+    onboarding: list[PilotFunnelStageMetric]
+    health_sample_count: int
+    healthy_health_sample_count: int
+    agent_health_percent: float | None
+    heartbeat_age_max_seconds: float | None
+    offline_queue_depth_max: int | None
+    command_ack_count: int
+    command_ack_latency_p50_ms: float | None
+    command_ack_latency_p95_ms: float | None
+    command_ack_latency_max_ms: float | None
+    family_deletion_failures: int
+
+
+class FamilyDeletionCounts(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    families: int = 0
+    children: int = 0
+    devices: int = 0
+    policies: int = 0
+    incidents: int = 0
+    evidence_records: int = 0
+    evidence_files: int = 0
+    commands: int = 0
+    app_sessions: int = 0
+    daily_telemetry: int = 0
+    onboarding_events: int = 0
+    health_samples: int = 0
+
+
+class FamilyDeletionReceipt(BaseModel):
+    """Technical proof without family names, child names, observed content, or evidence paths."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    family_reference_sha256: str
+    status: FamilyDeletionStatus
+    counts: FamilyDeletionCounts
+    requested_at: datetime
+    completed_at: datetime | None = None
 
 
 class DeviceCommand(BaseModel):

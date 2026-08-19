@@ -1,5 +1,8 @@
 from types import SimpleNamespace
 
+import pytest
+from pydantic import ValidationError
+
 from agent.main import flush_offline_outbox
 from agent.outbox import PersistentOutbox
 
@@ -122,3 +125,33 @@ def test_signed_flush_retains_legacy_item_without_credential_binding(tmp_path) -
 
     assert flush_offline_outbox(outbox, SignedClient()) == 0
     assert outbox.items()[0].id == queued.id
+
+
+def test_pilot_telemetry_outbox_rejects_content_fields(tmp_path) -> None:
+    outbox = PersistentOutbox(tmp_path / "outbox.json")
+
+    with pytest.raises(ValidationError):
+        outbox.enqueue(
+            "PILOT_TELEMETRY",
+            "device-demo",
+            {"agent_version": "0.1.0", "app_name": "Private Chat"},
+        )
+
+    item = outbox.enqueue(
+        "PILOT_TELEMETRY",
+        "device-demo",
+        {"agent_version": "0.1.0", "permission_state": "GRANTED"},
+    )
+    assert item.payload == {"agent_version": "0.1.0", "permission_state": "GRANTED"}
+
+
+def test_persisted_pilot_telemetry_is_revalidated_before_delivery(tmp_path) -> None:
+    path = tmp_path / "outbox.json"
+    path.write_text(
+        '[{"id":"1","kind":"PILOT_TELEMETRY","device_id":"device-demo",'
+        '"payload":{"agent_version":"0.1.0","visible_text":"private"},'
+        '"created_at":"2026-08-20T00:00:00+00:00","attempts":0}]',
+        encoding="utf-8",
+    )
+
+    assert PersistentOutbox(path).items() == ()

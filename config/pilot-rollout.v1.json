@@ -1,0 +1,28 @@
+{
+  "schema_version": "guardian.pilot-rollout.v1",
+  "rollout_id": "pilot-2026-technical-shadow",
+  "mode": "TECHNICAL_SHADOW",
+  "cohort_ids": ["pilot-technical"],
+  "alert_approvals": [],
+  "block_approvals": [],
+  "kill_switches": [
+    {
+      "switch_id": "pilot-global-pre-authorization",
+      "enabled": true,
+      "category": null,
+      "cohort_id": null,
+      "ceiling": "LOG",
+      "reason": "Real pilot interventions remain disabled until external approvals are recorded"
+    }
+  ],
+  "technical_telemetry_fields": [
+    "agent_version",
+    "api_latency_ms",
+    "battery_impact_percent",
+    "command_latency_ms",
+    "cpu_percent",
+    "memory_mb",
+    "offline_queue_depth",
+    "permission_state"
+  ]
+}

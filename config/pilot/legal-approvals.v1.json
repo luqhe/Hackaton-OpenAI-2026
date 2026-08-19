@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "roadmap_id": "R5-02",
+  "package_version": "2026-08-19.draft-1",
+  "approved_for_pilot": false,
+  "documents": [
+    "docs/pilot/legal/consent-and-assent.md",
+    "docs/pilot/legal/privacy-notice.md",
+    "docs/pilot/legal/pilot-terms.md",
+    "docs/pilot/legal/review-checklist.md"
+  ],
+  "required_approvals": {
+    "LEGAL": {
+      "status": "PENDING",
+      "reviewer": null,
+      "reviewed_at": null,
+      "scope": null
+    },
+    "PRIVACY": {
+      "status": "PENDING",
+      "reviewer": null,
+      "reviewed_at": null,
+      "scope": null
+    },
+    "PRODUCT_SAFETY": {
+      "status": "PENDING",
+      "reviewer": null,
+      "reviewed_at": null,
+      "scope": null
+    }
+  }
+}

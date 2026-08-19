@@ -53,11 +53,15 @@ from guardian_core.models import (
     Incident,
     IncidentCreate,
     IncidentStatus,
+    PilotMetricsReport,
+    PilotOnboardingEvent,
+    PilotOnboardingEventCreate,
     PolicyRule,
     ProductCapabilities,
     TelemetryUpdate,
     UnlockRequest,
 )
+from guardian_core.pilot import PilotTechnicalTelemetry
 from guardian_core.version import API_VERSION, APP_VERSION
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -606,6 +610,58 @@ def create_app(
             raise HTTPException(status_code=404, detail="Resource not found") from None
         except ValueError:
             raise HTTPException(status_code=404, detail="Resource not found") from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/api/pilot/onboarding-events",
+        response_model=PilotOnboardingEvent,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def record_pilot_onboarding_event(
+        payload: PilotOnboardingEventCreate,
+        response: Response,
+        scope: FamilyScope = Depends(require_family_scope),
+    ) -> PilotOnboardingEvent:
+        try:
+            event, created = store.record_onboarding_event(scope.family_id, payload)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Child or device not found") from None
+        except ValueError as error:
+            raise HTTPException(status_code=409, detail=str(error)) from None
+        response.headers["X-Guardian-Deduplicated"] = "false" if created else "true"
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return event
+
+    @app.get("/api/pilot/metrics", response_model=PilotMetricsReport)
+    def pilot_metrics(
+        since_hours: int = Query(default=24, ge=1, le=168),
+        scope: FamilyScope = Depends(require_family_scope),
+    ) -> PilotMetricsReport:
+        return store.pilot_metrics(since_hours, family_id=scope.family_id)
+
+    @app.post("/api/agent/pilot-telemetry", status_code=status.HTTP_204_NO_CONTENT)
+    def authenticated_pilot_telemetry(
+        payload: PilotTechnicalTelemetry,
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> Response:
+        try:
+            store.record_pilot_telemetry(principal.family_id, principal.device_id, payload)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Device not found") from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/devices/{device_id}/pilot-telemetry", status_code=status.HTTP_204_NO_CONTENT)
+    def record_pilot_telemetry(
+        device_id: str,
+        payload: PilotTechnicalTelemetry,
+        scope: FamilyScope = Depends(parent_scope),
+    ) -> Response:
+        require_demo_agent_route()
+        try:
+            store.record_pilot_telemetry(scope.family_id, device_id, payload)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Device not found") from None
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/api/daily-report", response_model=DailyReport)

@@ -100,6 +100,10 @@ class FakeClient:
         self.events.append("telemetry")
         self.telemetry.append(payload)
 
+    def record_pilot_telemetry(self, device_id, payload):
+        self.events.append("pilot-telemetry")
+        self.telemetry.append((device_id, payload))
+
     def record_device_heartbeat(self, payload):
         self.events.append("heartbeat")
         return {"id": "credential-device", "protection_status": "PROTECTED"}
@@ -397,11 +401,32 @@ def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp
     assert agent_main.run_observer(args) == 0
 
     assert events[:4] == ["capture", "active-app", "heartbeat", "assessment"]
-    assert client.incidents[0]["decision"]["action"] == "ALERT"
-    assert "child_id" not in client.incidents[0]
-    assert "device_id" not in client.incidents[0]
-    assert client.uploads[0][0] == "incident-live"
+    assert client.incidents == []
+    assert client.uploads == []
     assert enforcer.blocked == []
+
+
+def test_observe_uses_built_in_fail_safe_when_pilot_config_is_invalid(monkeypatch, tmp_path) -> None:
+    invalid = tmp_path / "invalid-pilot.json"
+    invalid.write_text("not-json", encoding="utf-8")
+    config = agent_main.load_runtime_pilot_rollout(invalid)
+
+    assert config.mode == "TECHNICAL_SHADOW"
+    assert config.kill_switches[0].ceiling == "LOG"
+
+
+def test_corrupt_active_config_wins_over_valid_file_config(tmp_path) -> None:
+    state_directory = tmp_path / "pilot-state"
+    state_directory.mkdir()
+    (state_directory / "active.json").write_text("broken", encoding="utf-8")
+
+    config = agent_main.load_runtime_pilot_rollout(
+        agent_main.DEFAULT_PILOT_CONFIG_PATH,
+        state_directory,
+    )
+
+    assert config.rollout_id == "runtime-fail-safe"
+    assert config.mode == "TECHNICAL_SHADOW"
 
 
 def test_observe_command_skips_analysis_for_static_screen(monkeypatch, tmp_path) -> None:
@@ -432,7 +457,7 @@ def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monke
     settings = development_settings(tmp_path)
 
     class OfflineClient(FakeClient):
-        def record_device_telemetry(self, payload):
+        def record_pilot_telemetry(self, device_id, payload):
             raise GuardianAPIError("offline")
 
         def create_device_incident(self, payload):
@@ -457,7 +482,10 @@ def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monke
 
     assert agent_main.run_observer(args) == 0
 
-    assert [item.kind for item in PersistentOutbox(args.outbox_path).items()] == [
-        "TELEMETRY",
-        "INCIDENT",
-    ]
+    queued = PersistentOutbox(args.outbox_path).items()
+    assert [item.kind for item in queued] == ["PILOT_TELEMETRY"]
+    assert queued[0].payload == {
+        "agent_version": agent_main.APP_VERSION,
+        "offline_queue_depth": 0,
+        "permission_state": "GRANTED",
+    }

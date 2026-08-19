@@ -1,0 +1,287 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from contextlib import contextmanager
+from datetime import datetime
+from enum import StrEnum
+from pathlib import Path
+
+from pydantic import BaseModel, ConfigDict, Field
+
+from guardian_core.pilot import (
+    PilotKillSwitch,
+    PilotMode,
+    PilotRolloutConfig,
+    fail_safe_pilot_rollout,
+    load_pilot_rollout,
+)
+
+
+class PilotChangeAction(StrEnum):
+    ACTIVATE = "ACTIVATE"
+    ROLLBACK = "ROLLBACK"
+    KILL_SWITCH = "KILL_SWITCH"
+
+
+class PilotConcurrentUpdateError(RuntimeError):
+    pass
+
+
+class PilotConfigChange(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    schema_version: str = "guardian.pilot-config-change.v1"
+    action: PilotChangeAction
+    previous_digest: str | None = Field(default=None, pattern=r"^[a-f0-9]{64}$")
+    active_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    actor_subject_digest: str = Field(pattern=r"^[a-f0-9]{64}$")
+    change_reference: str = Field(min_length=1, max_length=120)
+    changed_at: datetime
+
+
+def _canonical_payload(config: PilotRolloutConfig) -> dict[str, object]:
+    payload = config.model_dump(mode="json")
+    payload["cohort_ids"] = sorted(payload["cohort_ids"])
+    payload["technical_telemetry_fields"] = sorted(payload["technical_telemetry_fields"])
+    for collection_name in ("alert_approvals", "block_approvals"):
+        approvals = payload[collection_name]
+        for approval in approvals:
+            approval["cohort_ids"] = sorted(approval["cohort_ids"])
+        payload[collection_name] = sorted(approvals, key=lambda item: item["approval_id"])
+    payload["kill_switches"] = sorted(payload["kill_switches"], key=lambda item: item["switch_id"])
+    return payload
+
+
+def pilot_config_json(config: PilotRolloutConfig) -> str:
+    return json.dumps(_canonical_payload(config), indent=2, sort_keys=True) + "\n"
+
+
+def pilot_config_digest(config: PilotRolloutConfig) -> str:
+    canonical = json.dumps(_canonical_payload(config), sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+
+
+class PilotConfigStore:
+    """Atomic active config plus content-addressed snapshots and append-only change audit."""
+
+    def __init__(self, state_directory: Path) -> None:
+        self.state_directory = state_directory
+        self.active_path = state_directory / "active.json"
+        self.snapshot_directory = state_directory / "snapshots"
+        self.audit_path = state_directory / "changes.jsonl"
+        self.lock_path = state_directory / ".pilot-controls.lock"
+
+    def current(self) -> PilotRolloutConfig | None:
+        if not self.active_path.exists():
+            return None
+        return load_pilot_rollout(self.active_path)
+
+    def current_or_fail_safe(self) -> PilotRolloutConfig:
+        try:
+            return self.current() or fail_safe_pilot_rollout()
+        except (OSError, ValueError):
+            return fail_safe_pilot_rollout()
+
+    def changes(self) -> list[PilotConfigChange]:
+        if not self.audit_path.exists():
+            return []
+        return [
+            PilotConfigChange.model_validate_json(line)
+            for line in self.audit_path.read_text(encoding="utf-8").splitlines()
+            if line.strip()
+        ]
+
+    def activate(
+        self,
+        config: PilotRolloutConfig,
+        *,
+        actor_subject_digest: str,
+        change_reference: str,
+        changed_at: datetime,
+        expected_active_digest: str | None,
+    ) -> PilotConfigChange:
+        with self._exclusive_lock():
+            return self._write_change(
+                config,
+                action=PilotChangeAction.ACTIVATE,
+                actor_subject_digest=actor_subject_digest,
+                change_reference=change_reference,
+                changed_at=changed_at,
+                expected_active_digest=expected_active_digest,
+            )
+
+    def rollback(
+        self,
+        target_digest: str,
+        *,
+        actor_subject_digest: str,
+        change_reference: str,
+        changed_at: datetime,
+        expected_active_digest: str,
+    ) -> PilotConfigChange:
+        with self._exclusive_lock():
+            if len(target_digest) != 64 or any(
+                character not in "0123456789abcdef" for character in target_digest
+            ):
+                raise ValueError("Rollback digest must be a lowercase SHA-256 value")
+            snapshot_path = self.snapshot_directory / f"{target_digest}.json"
+            if not snapshot_path.exists():
+                raise ValueError("Rollback snapshot does not exist")
+            target = load_pilot_rollout(snapshot_path)
+            if pilot_config_digest(target) != target_digest:
+                raise ValueError("Rollback snapshot digest mismatch")
+            has_global_kill_switch = any(
+                switch.enabled and switch.category is None and switch.cohort_id is None
+                for switch in target.kill_switches
+            )
+            if target.mode != PilotMode.TECHNICAL_SHADOW and not has_global_kill_switch:
+                raise ValueError("Rollback target must be technical shadow or retain a global kill switch")
+            return self._write_change(
+                target,
+                action=PilotChangeAction.ROLLBACK,
+                actor_subject_digest=actor_subject_digest,
+                change_reference=change_reference,
+                changed_at=changed_at,
+                expected_active_digest=expected_active_digest,
+            )
+
+    def set_kill_switch(
+        self,
+        switch: PilotKillSwitch,
+        *,
+        actor_subject_digest: str,
+        change_reference: str,
+        changed_at: datetime,
+        expected_active_digest: str,
+    ) -> PilotConfigChange:
+        with self._exclusive_lock():
+            current = self.current()
+            if current is None:
+                raise ValueError("Cannot set a kill switch before a pilot config is active")
+            switches = [item for item in current.kill_switches if item.switch_id != switch.switch_id]
+            updated = current.model_copy(update={"kill_switches": (*switches, switch)})
+            return self._write_change(
+                updated,
+                action=PilotChangeAction.KILL_SWITCH,
+                actor_subject_digest=actor_subject_digest,
+                change_reference=change_reference,
+                changed_at=changed_at,
+                expected_active_digest=expected_active_digest,
+            )
+
+    def _write_change(
+        self,
+        config: PilotRolloutConfig,
+        *,
+        action: PilotChangeAction,
+        actor_subject_digest: str,
+        change_reference: str,
+        changed_at: datetime,
+        expected_active_digest: str | None,
+    ) -> PilotConfigChange:
+        if changed_at.tzinfo is None:
+            raise ValueError("Pilot changes require a timezone-aware timestamp")
+        previous = self.current()
+        previous_digest = pilot_config_digest(previous) if previous else None
+        if previous_digest != expected_active_digest:
+            raise PilotConcurrentUpdateError(
+                f"Active pilot digest changed: expected {expected_active_digest}, found {previous_digest}"
+            )
+        active_digest = pilot_config_digest(config)
+        snapshot_path = self.snapshot_directory / f"{active_digest}.json"
+        serialized = pilot_config_json(config)
+        change = PilotConfigChange(
+            action=action,
+            previous_digest=previous_digest,
+            active_digest=active_digest,
+            actor_subject_digest=actor_subject_digest,
+            change_reference=change_reference,
+            changed_at=changed_at,
+        )
+        existing_changes = self.changes()
+        audit_content = "".join(item.model_dump_json() + "\n" for item in (*existing_changes, change))
+        updates: list[tuple[Path, str]] = []
+        if snapshot_path.exists():
+            existing = load_pilot_rollout(snapshot_path)
+            if pilot_config_digest(existing) != active_digest:
+                raise ValueError("Existing pilot snapshot is corrupt")
+        else:
+            updates.append((snapshot_path, serialized))
+        updates.extend(((self.audit_path, audit_content), (self.active_path, serialized)))
+        self._apply_transaction(updates)
+        return change
+
+    @contextmanager
+    def _exclusive_lock(self):
+        self.state_directory.mkdir(parents=True, exist_ok=True)
+        handle = self.lock_path.open("a+b")
+        try:
+            self._lock_handle(handle)
+            yield
+        finally:
+            self._unlock_handle(handle)
+            handle.close()
+
+    @staticmethod
+    def _lock_handle(handle) -> None:
+        try:
+            if os.name == "nt":
+                import msvcrt
+
+                if handle.seek(0, 2) == 0:
+                    handle.write(b"\0")
+                    handle.flush()
+                handle.seek(0)
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+
+                fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError as error:
+            handle.close()
+            raise PilotConcurrentUpdateError("Pilot controls are being updated concurrently") from error
+
+    @staticmethod
+    def _unlock_handle(handle) -> None:
+        if handle.closed:
+            return
+        if os.name == "nt":
+            import msvcrt
+
+            handle.seek(0)
+            msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+    def _apply_transaction(self, updates: list[tuple[Path, str]]) -> None:
+        originals = {path: path.read_bytes() if path.exists() else None for path, _ in updates}
+        changed: list[Path] = []
+        try:
+            for path, content in updates:
+                self._atomic_write(path, content)
+                changed.append(path)
+        except Exception:
+            for path in reversed(changed):
+                self._restore(path, originals[path])
+            raise
+
+    @staticmethod
+    def _atomic_write(path: Path, content: str) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f"{path.suffix}.tmp")
+        temporary.write_text(content, encoding="utf-8")
+        temporary.replace(path)
+
+    @staticmethod
+    def _restore(path: Path, original: bytes | None) -> None:
+        if original is None:
+            path.unlink(missing_ok=True)
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = path.with_suffix(f"{path.suffix}.restore.tmp")
+        temporary.write_bytes(original)
+        temporary.replace(path)

@@ -109,8 +109,9 @@ class RegressionGate(BaseModel):
 
 def load_dataset(path: Path) -> tuple[list[EvalExample], str]:
     raw = path.read_bytes()
+    canonical_raw = raw.replace(b"\r\n", b"\n").replace(b"\r", b"\n")
     examples: list[EvalExample] = []
-    for line_number, line in enumerate(raw.decode("utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(canonical_raw.decode("utf-8").splitlines(), start=1):
         if not line.strip():
             continue
         try:
@@ -125,7 +126,7 @@ def load_dataset(path: Path) -> tuple[list[EvalExample], str]:
     present_splits = {example.split for example in examples}
     if present_splits != {"development", "calibration", "test"}:
         raise ValueError("Dataset must contain development, calibration and test splits")
-    return examples, hashlib.sha256(raw).hexdigest()
+    return examples, hashlib.sha256(canonical_raw).hexdigest()
 
 
 def _metric_slice(

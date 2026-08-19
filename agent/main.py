@@ -34,9 +34,19 @@ from guardian_core.models import (
     RiskAssessment,
     TelemetryUpdate,
 )
+from guardian_core.pilot import (
+    PilotRolloutConfig,
+    PilotTechnicalTelemetry,
+    apply_pilot_rollout,
+    fail_safe_pilot_rollout,
+    load_pilot_rollout,
+    validate_pilot_technical_telemetry,
+)
+from guardian_core.pilot_control import PilotConfigStore
 from guardian_core.policy import apply_policy
 from guardian_core.version import APP_VERSION
 from risk_engine import assess_risk
+from risk_engine.calibration import VersionSet
 from risk_engine.context import build_context
 from risk_engine.contracts import ContextBundle, ProviderDescriptor
 from risk_engine.openai import (
@@ -50,6 +60,24 @@ from risk_engine.pipeline import AnalysisSource, ContextualRiskPipeline, Pipelin
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 AGENT_LOGGER = StructuredAgentLogger()
+DEFAULT_PILOT_CONFIG_PATH = PROJECT_ROOT / "config" / "pilot-rollout.v1.json"
+DEFAULT_PILOT_STATE_DIRECTORY = PROJECT_ROOT / ".data" / "pilot-controls"
+RUNTIME_DATASET_VERSION = "runtime-observation-unapproved"
+
+
+def load_runtime_pilot_rollout(path: Path, state_directory: Path | None = None):
+    if state_directory is not None:
+        store = PilotConfigStore(state_directory)
+        if store.active_path.exists():
+            config = store.current_or_fail_safe()
+            if config.rollout_id == "runtime-fail-safe":
+                AGENT_LOGGER.event("pilot_active_config_corrupt", config_path=str(store.active_path))
+            return config
+    try:
+        return load_pilot_rollout(path)
+    except (OSError, ValueError):
+        AGENT_LOGGER.event("pilot_config_fail_safe", config_path=str(path))
+        return fail_safe_pilot_rollout()
 
 
 def apply_validated_policy(
@@ -118,7 +146,9 @@ def flush_offline_outbox(outbox: PersistentOutbox, client: GuardianAPIClient) ->
         payload.pop("child_id", None)
         payload.pop("device_id", None)
         try:
-            if item.kind == "TELEMETRY":
+            if item.kind == "PILOT_TELEMETRY":
+                client.record_pilot_telemetry(item.device_id, payload)
+            elif item.kind == "TELEMETRY":
                 payload.setdefault("observed_at", item.created_at)
                 client.record_device_telemetry(payload)
             else:
@@ -130,23 +160,27 @@ def flush_offline_outbox(outbox: PersistentOutbox, client: GuardianAPIClient) ->
     return outbox.flush(deliver)
 
 
-def record_telemetry_or_queue(
+def record_pilot_telemetry_or_queue(
     client: GuardianAPIClient,
     outbox: PersistentOutbox,
     device_id: str,
     payload: dict[str, object],
+    pilot_config: PilotRolloutConfig,
 ) -> None:
+    telemetry = validate_pilot_technical_telemetry(payload, pilot_config).model_dump(
+        mode="json", exclude_none=True
+    )
     try:
-        client.record_device_telemetry(payload)
+        client.record_pilot_telemetry(device_id, telemetry)
     except GuardianAPIError:
         item = outbox.enqueue(
-            "TELEMETRY",
+            "PILOT_TELEMETRY",
             device_id,
-            payload,
+            telemetry,
             credential_id=client.credential.credential_id if client.credential else None,
         )
-        AGENT_LOGGER.event("offline_queue_added", kind="TELEMETRY", item_id=item.id)
-        print(f"offline_queue=TELEMETRY id={item.id}")
+        AGENT_LOGGER.event("offline_queue_added", kind="PILOT_TELEMETRY", item_id=item.id)
+        print(f"offline_queue=PILOT_TELEMETRY id={item.id}")
 
 
 def create_incident_or_queue(
@@ -390,6 +424,7 @@ def run_observer(args: argparse.Namespace) -> int:
     client = build_authenticated_client(args.api_url)
     state_store = AgentStateStore(args.runtime_state_path)
     outbox = PersistentOutbox(args.outbox_path)
+    pilot_config = load_runtime_pilot_rollout(args.pilot_config_path, args.pilot_state_directory)
     runtime_state = state_store.load()
     observer = MacOSObserver(
         change_threshold=args.change_threshold,
@@ -453,17 +488,28 @@ def run_observer(args: argparse.Namespace) -> int:
                     settings=settings,
                     fixture_input=False,
                 )
-                telemetry = AgentTelemetryUpdate(
-                    observed_at=observation.timestamp,
-                    screen_changes=1,
-                    suspicious_events=1 if assessment.risk != "SAFE" else 0,
-                    app_name=application,
-                ).model_dump(mode="json")
-                record_telemetry_or_queue(
+                decision, pilot_decision = apply_pilot_rollout(
+                    decision,
+                    category=assessment.category,
+                    cohort_id=args.pilot_cohort_id,
+                    versions=VersionSet(
+                        model=pipeline_result.model_version,
+                        prompt=pipeline_result.prompt_version,
+                        dataset=RUNTIME_DATASET_VERSION,
+                    ),
+                    config=pilot_config,
+                )
+                telemetry = PilotTechnicalTelemetry(
+                    agent_version=APP_VERSION,
+                    offline_queue_depth=len(outbox.items()),
+                    permission_state="GRANTED",
+                ).model_dump(mode="json", exclude_none=True)
+                record_pilot_telemetry_or_queue(
                     client,
                     outbox,
                     client.credential.device_id,
                     telemetry,
+                    pilot_config,
                 )
                 source = (
                     "OPENAI"
@@ -482,8 +528,11 @@ def run_observer(args: argparse.Namespace) -> int:
                     category=assessment.category,
                     decision=decision.action,
                     application=application,
+                    pilot_rollout=pilot_decision.rollout_id,
+                    pilot_mode=pilot_decision.mode,
+                    simulated_action=pilot_decision.simulated_action,
                 )
-                if decision.action != "IGNORE":
+                if decision.action in {"ALERT", "BLOCK"}:
                     incident_payload = AgentIncidentCreate(
                         application=application,
                         occurred_at=observation.timestamp,
@@ -679,6 +728,17 @@ def build_parser() -> argparse.ArgumentParser:
         type=Path,
         default=PROJECT_ROOT / ".data" / "outbox.json",
     )
+    observe.add_argument(
+        "--pilot-config-path",
+        type=Path,
+        default=DEFAULT_PILOT_CONFIG_PATH,
+    )
+    observe.add_argument(
+        "--pilot-state-directory",
+        type=Path,
+        default=DEFAULT_PILOT_STATE_DIRECTORY,
+    )
+    observe.add_argument("--pilot-cohort-id", default="pilot-technical")
     observe.add_argument("--openai-timeout", type=float, default=20)
     observe.add_argument("--minimum-interval", type=float, default=10)
     observe.add_argument("--maximum-interval", type=float, default=60)
