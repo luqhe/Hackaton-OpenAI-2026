@@ -1,120 +1,141 @@
 # Guardian — Android Mobile Port
 
-Guardian is a contextual digital-safety and digital-literacy MVP for children and teenagers. It interprets recent activity, evaluates contextual risk, applies deterministic family policy, stores minimal evidence, and leaves the final unlock decision to a parent or guardian.
+Guardian is a contextual digital-safety and digital-literacy MVP for children and teenagers. It evaluates recent context, separates risk classification from deterministic family policy, stores minimal incident evidence, and keeps the final unlock decision with a parent or guardian.
 
-> **This branch is the Android mobile port.**
+> **Branch status**
 >
-> - `main` remains the original desktop/web Guardian MVP.
-> - `agent/android-mobile-port` contains the native Android interface and the shared Guardian backend required by the mobile demo.
-> - Mobile-specific work should remain on this branch instead of being merged into `main` unless that decision changes later.
+> - `main` remains the primary desktop/web development branch.
+> - `agent/android-mobile-port` is the maintained Android port.
+> - This branch periodically merges `main` and adapts upstream product/backend changes to the mobile client without moving safety logic into Kotlin.
 
-The reproducible vertical slice is still:
+The Android app is a native **Kotlin + Jetpack Compose** client. The Python backend remains the source of truth for risk assessment, calibration, policy, incidents, evidence, telemetry, device commands, evaluation, and shadow-mode controls.
 
-```text
-conversation fixture → risk assessment → family policy → simulated block
-→ incident → child explanation → parent decision → unlock command
-```
-
-The main architectural change is the client: the product-facing interface is now a **native Android application built with Kotlin and Jetpack Compose**. The Python/FastAPI backend remains the source of truth for risk classification, family policy, incidents, evidence, telemetry, and device commands.
-
-The Android application does **not** use a WebView and does **not** duplicate the safety decision engine in Kotlin.
+The Android app does **not** use a WebView and does **not** call OpenAI directly.
 
 ---
 
-## What the mobile branch implements
-
-### Native Android experience
-
-- Parent dashboard with daily usage and incident metrics.
-- Incident list and incident-detail review.
-- Parent actions to **unlock** or **keep blocked**.
-- Child transparency view with daily app-use aggregation.
-- Family policy editor for `ALLOW`, `ALERT`, and `BLOCK` actions.
-- Guardian API connection settings.
-- Android device pairing through `POST /api/devices/pair`.
-- Capability-aware UI so the app does not imply features the backend has not enabled.
-- Android-specific CI that builds the debug APK.
-
-### Shared Guardian backend
-
-- Contextual deterministic risk engine.
-- Controlled fixtures for dangerous contact, adult content, hate speech, and safe biology content.
-- Deterministic Policy Engine; the risk classifier never directly chooses a device action.
-- FastAPI API with SQLite persistence.
-- Incident deduplication.
-- Minimal evidence storage with a 4 MB upload limit.
-- Device command queue and acknowledgements.
-- Daily telemetry and reports.
-- Release gates for automatic or real enforcement.
-- Existing browser UI retained as a development/debug interface.
-
-### Deliberately not implemented on Android yet
-
-The Android port currently requests only the `INTERNET` permission. It does **not** request or implement:
-
-- Accessibility Service access.
-- MediaProjection / continuous screen capture.
-- Microphone access.
-- Camera access.
-- Notification Listener access.
-- Device Administrator / Device Owner capabilities.
-- Real Android application blocking.
-
-This is intentional. The original Guardian MVP is simulation-first, and this branch preserves that safety boundary until an Android-specific enforcement model, consent flow, permission model, threat model, and release gate are defined.
-
----
-
-## Architecture
+## Current architecture
 
 ```mermaid
 flowchart LR
-    O["Observation / controlled fixture"] --> R["Python Risk Engine"]
-    R --> A["RiskAssessment — no device action"]
-    A --> P["Deterministic Policy Engine"]
-    P --> I["FastAPI incidents / commands"]
-    P --> E["Demo Agent Enforcer"]
+    INPUT["Fixture or selected demo frame"] --> CONTEXT["Context normalization"]
+    CONTEXT --> RISK["Risk provider / classifier"]
+    RISK --> CAL["Calibration + safety controls"]
+    CAL --> POLICY["Deterministic family policy"]
+    POLICY --> API["Guardian FastAPI"]
+    POLICY --> AGENT["Demo / macOS enforcer"]
 
-    I --> M["Android Compose App"]
-    M --> PD["Parent decision"]
-    PD --> I
+    API --> ANDROID["Android Compose client"]
+    ANDROID --> DECISION["Parent decision"]
+    DECISION --> API
 
-    I --> S[("SQLite + minimal evidence")]
-    I --> C["Persistent device command"]
-    C --> E
+    API --> DB[("SQLite + minimal evidence")]
+    API --> COMMAND["Persistent device command"]
+    COMMAND --> AGENT
 ```
 
-The platform boundary is deliberate:
+The important boundary is:
 
 ```text
-Android UI / device integration
+Android UI / device registration
             ↓
         Guardian API
             ↓
-shared Python risk + policy logic
+shared Python context + risk + calibration + policy pipeline
 ```
 
-Keeping risk and family-policy evaluation on the shared backend avoids two independent implementations making different safety decisions.
+This prevents the mobile port from becoming a second safety implementation with different classification or enforcement behavior.
 
-### Repository layout on this branch
+---
+
+## What changed after the latest `main` sync
+
+The mobile branch now includes the current upstream risk and demo work from `main`:
+
+- normalized contextual risk contracts and provider descriptors;
+- category-specific confidence calibration;
+- configurable risk controls, thresholds, kill switches, and block approvals;
+- a versioned OpenAI multimodal provider for the optional one-shot demo;
+- a contextual risk pipeline with provider fallback/error handling;
+- frozen evaluation data and regression gates;
+- shadow-mode window aggregation and generated reports;
+- R3 evaluation checks in CI and local quality scripts;
+- the controlled `/demo-chat` experience;
+- `scripts/run-live-demo.sh` and the optional macOS screenshot path;
+- additional live-demo, OpenAI, pipeline, calibration, evaluation, and shadow tests;
+- the upstream local demo runbook under `docs/product/demo-runbook.md`.
+
+### Mobile adaptation of those changes
+
+- The Android app remains a **review/control-plane client**. Risk providers, calibration, OpenAI requests, policy evaluation, and release gates stay in Python.
+- The deterministic fixture flow remains the recommended cross-platform Android demo.
+- Incidents created by the optional one-shot visual demo are compatible with the Android incident screen because the client already consumes the same incident contract and carries `screenshot_urls`.
+- Android does not perform the macOS screen capture used by `live-demo`.
+- Android does not gain Accessibility, MediaProjection, notification-listener, device-admin, microphone, or camera permissions as part of this sync.
+- Real Android observation/enforcement remains a separate future architecture/release-gate decision.
+
+For the mobile-specific presentation path, see [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md).
+
+---
+
+## Repository layout
 
 ```text
 guardian/
-├── android-app/      native Kotlin + Jetpack Compose application
-├── agent/            demo agent, API client, observer and enforcer
-├── api/              FastAPI application and SQLite persistence
-├── guardian_core/    shared contracts and deterministic Policy Engine
-├── risk_engine/      contextual risk evaluation
-├── fixtures/         controlled reproducible demo scenarios
-├── config/           environment configuration examples
-├── docs/             security, privacy, release gates and ADRs
-├── web/              original browser UI for development/debugging
-├── tests/            backend and safety tests
-├── scripts/          bootstrap, API and demo commands
-├── build.gradle.kts  Android project plugin versions
+├── android-app/      native Kotlin + Jetpack Compose client
+├── agent/            host-side agent, observer, API client and enforcer
+├── api/              FastAPI control plane and SQLite persistence
+├── guardian_core/    shared models, policy engine and runtime gates
+├── risk_engine/      classifier, context, providers, calibration, eval + shadow pipeline
+├── config/           environment examples and risk controls
+├── evals/            frozen datasets, gates and generated R3 results
+├── fixtures/         deterministic reproducible demo scenarios
+├── docs/             ADRs, runbooks, privacy, security and release gates
+├── web/              browser dashboard + controlled demo chat
+├── tests/            backend, risk, live-demo and safety regression tests
+├── scripts/          bootstrap, checks, demos, evaluation and reset commands
+├── build.gradle.kts  Android plugin/toolchain versions
 └── settings.gradle.kts
 ```
 
-The Android architecture decision is documented in [`docs/adr/0005-android-mobile-client.md`](docs/adr/0005-android-mobile-client.md).
+The Android architectural decision is documented in [`docs/adr/0005-android-mobile-client.md`](docs/adr/0005-android-mobile-client.md).
+
+---
+
+# Android application
+
+## Implemented mobile flows
+
+- Parent dashboard with daily usage and incident metrics.
+- Incident list and incident review.
+- Parent **unlock** and **keep blocked** actions.
+- Child transparency view with daily aggregated app use.
+- Family policy editor for `ALLOW`, `ALERT`, and `BLOCK` actions.
+- Guardian API connection configuration.
+- Android device pairing through `POST /api/devices/pair`.
+- Capability-aware UI backed by `/api/capabilities`.
+- Support for incident records that include visual-evidence URLs.
+- Independent Android CI build.
+
+## Deliberately not implemented on Android
+
+The Android manifest requests only:
+
+```text
+android.permission.INTERNET
+```
+
+This port does not currently request or implement:
+
+- Accessibility Service access;
+- MediaProjection or continuous screen capture;
+- microphone access;
+- camera access;
+- Notification Listener access;
+- Device Administrator / Device Owner control;
+- real Android application blocking.
+
+That is intentional. Any real Android observation or enforcement must have its own permission model, consent/revocation path, package denylist, Android/Play-policy review, privacy/threat-model update, and release gate.
 
 ---
 
@@ -123,7 +144,7 @@ The Android architecture decision is documented in [`docs/adr/0005-android-mobil
 | Item | Specification |
 |---|---|
 | Application ID | `com.guardian.mobile` |
-| Android app version | `0.1.0` (`versionCode = 1`) |
+| App version | `0.1.0` (`versionCode = 1`) |
 | Language | Kotlin `2.3.21` |
 | UI | Jetpack Compose + Material 3 |
 | Compose BOM | `2026.06.00` |
@@ -134,77 +155,60 @@ The Android architecture decision is documented in [`docs/adr/0005-android-mobil
 | `compileSdk` | 36 |
 | `targetSdk` | 36 |
 | `minSdk` | 26 |
-| Debug network policy | Cleartext HTTP allowed for local development |
-| Release network policy | Cleartext HTTP disabled; use HTTPS |
+| Debug transport | Local cleartext HTTP permitted |
+| Release transport | Cleartext disabled; use HTTPS |
 | Android permissions | `INTERNET` only |
 
-The debug configuration allows local HTTP specifically so an emulator or development phone can connect to the local FastAPI server. Release builds disable cleartext traffic.
+The repository does not currently include a Gradle wrapper. Command-line Android builds therefore expect a compatible `gradle` executable; Android Studio can import the root project directly.
 
 ---
 
-## Dependencies
+# Backend and risk-pipeline dependencies
 
-### Required for the Android app
+## Required for the deterministic local demo
 
-Install either Android Studio with the required SDK components or an equivalent command-line Android toolchain.
+- Python 3.11+
+- Port `8000` available locally
+- Python dependencies from `requirements.txt` / `pyproject.toml`, including:
+  - `fastapi>=0.115,<1`
+  - `uvicorn[standard]>=0.34,<1`
+  - `pydantic>=2.10,<3`
+- Android Studio or an Android SDK/JDK/Gradle setup matching the Android specifications above
 
-Required:
+No OpenAI key, cloud database, remote authentication service, or external content is required for the deterministic fixture demo.
 
-- **JDK 17**.
-- **Android SDK Platform 36**.
-- Android SDK build/platform tools required by AGP.
-- **Gradle 8.13** if building from the command line.
+## Required for all repository quality checks
 
-The repository currently does not include a Gradle wrapper, so command-line builds expect a compatible `gradle` executable. Android Studio can import the project and manage the Gradle integration normally.
+The complete `scripts/check.sh` path also uses:
 
-Android runtime dependencies are declared in [`android-app/build.gradle.kts`](android-app/build.gradle.kts):
-
-- AndroidX Activity Compose.
-- Compose Foundation.
-- Compose Material 3.
-- Compose UI.
-- Compose UI tooling preview.
-- Compose UI tooling in debug builds.
-
-### Required for the Guardian backend
-
-- **Python 3.11+**.
-- Port `8000` available locally.
-
-Python dependencies are declared in `requirements.txt` / `pyproject.toml`, including:
-
-- `fastapi>=0.115,<1`
-- `uvicorn[standard]>=0.34,<1`
-- `pydantic>=2.10,<3`
-- development/test dependencies such as pytest and Ruff
-
-### Optional development dependencies
-
-The original browser UI remains in the branch. Its quality checks additionally use:
-
-- Node.js 22.
+- pytest;
+- Ruff;
+- Node.js 22;
 - pnpm 11.
 
-They are **not required** to run the Android demo.
+It runs Stage 0 validation, the frozen R3 regression/shadow checks, Python lint/format/tests, and browser JavaScript checks.
 
-### External services
+## Optional OpenAI live-demo dependency
 
-The reproducible local demo requires:
+The optional host-side one-shot visual demo uses the OpenAI Responses API through `risk_engine/openai.py`.
 
-- no OpenAI API key,
-- no cloud account,
-- no remote database,
-- no external authentication service.
+It requires:
+
+```bash
+export OPENAI_API_KEY="..."
+```
+
+The current default model is configured in the Python provider. The Android application never receives or stores this key and never calls OpenAI directly.
+
+The optional live demo is currently macOS-specific because capture uses the macOS observer. The deterministic fixture path remains the official portable fallback.
 
 ---
 
-# Local Android demo
+# Recommended local Android demo
 
-The recommended demo uses an **Android Emulator** and the existing controlled `dangerous_contact` fixture. This path requires no invasive Android permissions and is the most reproducible setup.
+This is the most reproducible path and requires no invasive Android permissions or OpenAI credentials.
 
 ## 1. Check out the mobile branch
-
-For an existing clone:
 
 ```bash
 git fetch origin
@@ -212,14 +216,14 @@ git switch agent/android-mobile-port
 git pull
 ```
 
-Or clone the branch directly:
+For a fresh clone:
 
 ```bash
 git clone --branch agent/android-mobile-port https://github.com/luqhe/Hackaton-OpenAI-2026.git
 cd Hackaton-OpenAI-2026
 ```
 
-## 2. Bootstrap the Python backend
+## 2. Bootstrap the backend
 
 ### macOS / Linux
 
@@ -233,9 +237,24 @@ bash scripts/bootstrap.sh
 .\scripts\bootstrap.ps1
 ```
 
-This creates `.venv` and installs the backend dependencies.
+This creates `.venv` and installs the Python dependencies.
 
-## 3. Start the Guardian API
+## 3. Optional: run the risk regression gate
+
+For the R3 risk/evaluation checks only:
+
+```bash
+.venv/bin/python scripts/run_r3_evals.py --check
+```
+
+For the complete repository checks on macOS/Linux, after installing the Node/pnpm dependencies:
+
+```bash
+pnpm install
+bash scripts/check.sh
+```
+
+## 4. Start the Guardian API
 
 In terminal 1:
 
@@ -251,7 +270,7 @@ bash scripts/run-api.sh
 .\scripts\run-api.ps1
 ```
 
-The standard development script binds the API to:
+The standard script listens on:
 
 ```text
 http://127.0.0.1:8000
@@ -259,38 +278,35 @@ http://127.0.0.1:8000
 
 Useful host-side endpoints:
 
-- Browser/debug UI: `http://127.0.0.1:8000`
+- Guardian browser/debug UI: `http://127.0.0.1:8000`
+- Controlled demo chat: `http://127.0.0.1:8000/demo-chat`
 - OpenAPI: `http://127.0.0.1:8000/docs`
-- Health check: `http://127.0.0.1:8000/api/health`
+- Health: `http://127.0.0.1:8000/api/health`
 
-## 4. Start an Android Emulator
+## 5. Start an Android Emulator
 
-Create or start an Android Virtual Device with a compatible Android system image.
-
-The Android app defaults to:
+The mobile app defaults to:
 
 ```text
 http://10.0.2.2:8000
 ```
 
-`10.0.2.2` is the Android Emulator alias for the development computer's loopback interface, so it reaches the FastAPI process listening on `127.0.0.1:8000`.
+`10.0.2.2` is the Android Emulator alias for the development computer's loopback interface, so it reaches the API listening on `127.0.0.1:8000`.
 
-No API URL change is normally necessary for the emulator demo.
-
-## 5. Build and run the Android app
+## 6. Build and run Android
 
 ### Android Studio
 
-1. Open the **repository root** in Android Studio.
-2. Allow Gradle sync to complete.
-3. Ensure Android SDK Platform 36 and JDK 17 are configured.
-4. Select the `android-app` application configuration/module.
+1. Open the **repository root**.
+2. Complete Gradle sync.
+3. Configure JDK 17 and Android SDK Platform 36.
+4. Select the `android-app` application module.
 5. Select the running emulator.
 6. Run the app.
 
 ### Command line
 
-With JDK 17, Android SDK 36, and Gradle 8.13 configured:
+With JDK 17, Android SDK 36 and Gradle 8.13 configured:
 
 ```bash
 gradle :android-app:assembleDebug
@@ -302,35 +318,33 @@ The debug APK is produced under:
 android-app/build/outputs/apk/debug/
 ```
 
-You can install it with ADB, for example:
+A typical ADB install command is:
 
 ```bash
 adb install -r android-app/build/outputs/apk/debug/android-app-debug.apk
 ```
 
-## 6. Verify the mobile connection
+## 7. Confirm connection
 
-Open **Conexão** in the Guardian Android app.
-
-For an emulator, the API should be:
+In Guardian Android, open **Conexão** and verify:
 
 ```text
 http://10.0.2.2:8000
 ```
 
-Use the connection check to confirm that the Guardian API is reachable.
+Use the connection check.
 
-The app initially uses the existing demo device ID:
+For the standard canned demo, keep the app on:
 
 ```text
 device-demo
 ```
 
-That is the recommended setting for the canned local demo because `scripts/run-demo.sh` also targets `device-demo` by default.
+The fixture launcher also targets `device-demo`, which lets the host-side demo agent and Android parent UI refer to the same incident/command stream.
 
-The **Pair this device** action is available to exercise Android device pairing, but pairing is not required for the fixture demo and does not enable real Android enforcement.
+**Parear este Android** is available for device-registration testing, but pairing does not enable Android observation or enforcement.
 
-## 7. Trigger the controlled incident
+## 8. Trigger the deterministic controlled incident
 
 In terminal 2:
 
@@ -348,44 +362,35 @@ bash scripts/run-demo.sh
 
 The agent will:
 
-1. Load `fixtures/dangerous_contact/session.json`.
-2. Detect the progressive requests for personal information.
-3. Produce a contextual risk assessment.
-4. Apply the deterministic family policy.
-5. Simulate the application block.
-6. Persist an incident and minimal text evidence.
-7. Wait for a parent decision.
+1. load `fixtures/dangerous_contact/session.json`;
+2. classify the contextual progression of personal-information requests;
+3. apply the deterministic family policy and runtime gate;
+4. simulate the application block;
+5. persist an incident and minimal evidence;
+6. wait for the parent decision.
 
-The default script uses `--wait-for-unlock`, so terminal 2 remains active while waiting for the decision.
-
-## 8. Review the incident on Android
+## 9. Complete the flow in Android
 
 In the Android app:
 
-1. Open **Início**.
-2. Refresh/reopen the dashboard if necessary.
-3. Select the newly created incident.
-4. Review the category, confidence, explanation, and relevant evidence.
-5. Choose either:
-   - **Unlock application**, or
-   - **Keep blocked**.
+1. open **Início**;
+2. refresh the dashboard;
+3. select the new incident;
+4. review category, confidence, explanation, and evidence;
+5. choose **Desbloquear aplicativo** or **Manter bloqueado**.
 
-If you unlock the application, the API creates a persistent `UNLOCK_APPLICATION` command for `device-demo`.
-
-Terminal 2 should then print a confirmation similar to:
+If you unlock, the backend creates an `UNLOCK_APPLICATION` command. Terminal 2 should eventually print something like:
 
 ```text
 unlocked=Guardian Demo Chat command=<id>
 ```
 
-That completes the end-to-end mobile demo:
+That completes the mobile vertical slice:
 
 ```text
 fixture
   ↓
-risk engine
-  ↓
-family policy
+shared risk + policy pipeline
   ↓
 incident
   ↓
@@ -393,12 +398,12 @@ Android parent review
   ↓
 unlock command
   ↓
-demo agent acknowledgement
+host demo-agent acknowledgement
 ```
 
-## 9. Reset the demo
+## 10. Reset the demo
 
-Stop the API before resetting state.
+Stop the API first.
 
 ### macOS / Linux
 
@@ -412,229 +417,185 @@ bash scripts/reset-demo.sh
 .\scripts\reset-demo.ps1
 ```
 
-The reset script removes only the local `.data/` runtime state after validating its target.
+---
+
+# Optional one-shot visual demo + Android review
+
+The latest upstream `main` also provides an optional macOS live-demo launcher.
+
+This does **not** make Android the observer. The host Mac captures one selected demo frame, classifies it, creates the same Guardian incident, and the Android app can then be used for parent review.
+
+Requirements:
+
+- macOS host;
+- the Guardian API running locally;
+- `OPENAI_API_KEY` for the actual OpenAI classification path;
+- the macOS screen-capture permission required by the observer;
+- controlled synthetic demo content.
+
+Run:
+
+```bash
+bash scripts/run-live-demo.sh
+```
+
+The launcher is explicit about its source/mode and falls back to the deterministic fixture path when the optional live path cannot complete.
+
+The host-side controlled chat is available at:
+
+```text
+http://127.0.0.1:8000/demo-chat
+```
+
+After an incident is created, refresh the Android dashboard and review it exactly like a fixture-generated incident.
+
+See the upstream [`docs/product/demo-runbook.md`](docs/product/demo-runbook.md) for the host/browser presentation flow and [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md) for the Android-adapted version.
 
 ---
 
-## Running on a physical Android device
+# Running on a physical Android device
 
 A physical phone cannot use `10.0.2.2` to reach the development computer.
 
-The phone and development machine must be able to reach each other over the network.
+Run FastAPI on an address reachable from the phone instead of using `scripts/run-api.sh`:
 
-### 1. Bind FastAPI to the LAN interface
-
-Instead of `scripts/run-api.sh`, run:
+### macOS / Linux
 
 ```bash
 .venv/bin/python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-On Windows:
+### Windows PowerShell
 
 ```powershell
 .\.venv\Scripts\python.exe -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-### 2. Find the development machine's LAN address
-
-For example:
-
-```text
-192.168.1.50
-```
-
-### 3. Configure the Android app
-
-Open **Conexão** and set:
+Then configure **Conexão** with the development computer's LAN address, for example:
 
 ```text
 http://192.168.1.50:8000
 ```
 
-Debug builds permit HTTP for this local-development case.
+Make sure the phone and computer are on the same trusted network and that the host firewall allows TCP port `8000`.
 
-Make sure:
-
-- the phone and development machine are on the same trusted network,
-- the host firewall permits the connection to TCP port 8000,
-- the network does not isolate wireless clients.
-
-For anything beyond trusted local development, use HTTPS rather than exposing the development API over cleartext HTTP.
+Debug builds permit local HTTP. Use HTTPS for anything beyond trusted local development.
 
 ---
 
-## Other controlled scenarios
+# Risk evaluation and controls
 
-With the API running:
+The synchronized branch includes the current R3 evaluation/control assets from `main`:
 
-### macOS / Linux
+- `config/risk-controls.v1.json` — calibration curves, category thresholds, kill switches and block approvals;
+- `evals/dataset-manifest.v1.json` — provenance/allowed-use metadata for the synthetic evaluation dataset;
+- `evals/dataset-v1.jsonl` — development/calibration/test contexts;
+- `evals/regression-gate.v1.json` — frozen regression criteria;
+- `evals/results/` — current evaluation and shadow outputs;
+- `scripts/run_r3_evals.py` — reproducible evaluation/check entry point.
+
+Run:
 
 ```bash
-.venv/bin/python -m agent.main demo --fixture fixtures/safe_biology/session.json
-.venv/bin/python -m agent.main demo --fixture fixtures/adult_content/session.json
-.venv/bin/python -m agent.main demo --fixture fixtures/hate_speech/session.json
+.venv/bin/python scripts/run_r3_evals.py --check
 ```
 
-On Windows, replace `.venv/bin/python` with `.venv\Scripts\python.exe`.
-
-`safe_biology` should return `SAFE` without creating an incident, demonstrating that Guardian evaluates context rather than blocking isolated sensitive terminology.
+These controls are backend concerns. Android displays the resulting incidents and policy state; it does not implement its own calibration or threshold logic.
 
 ---
 
-## Android device pairing
-
-The mobile app can pair itself with the demo child profile through:
-
-```http
-POST /api/devices/pair
-```
-
-The returned device ID is persisted in Android `SharedPreferences`.
-
-For the standard fixture demo, however, `scripts/run-demo.sh` uses `device-demo`. Use the **demo device** option in the app when you want the Android parent workflow and host-side demo agent to refer to the same device.
-
-Pairing an Android device currently represents registration only; it does **not** start Android-side observation or enforcement.
-
----
-
-## Backend / mobile API contract
-
-The Android application consumes the same API that powers the original browser client.
+# API used by Android
 
 | Method and route | Mobile use |
 |---|---|
 | `GET /api/health` | Connection check |
-| `GET /api/capabilities` | Display only features that are actually active |
+| `GET /api/capabilities` | Server capability disclosure |
 | `GET /api/devices/:id` | Device status |
-| `POST /api/devices/pair` | Pair an Android device |
+| `POST /api/devices/pair` | Register an Android device |
 | `GET /api/incidents` | Parent dashboard |
 | `GET /api/incidents/:id` | Incident review |
-| `POST /api/incidents/:id/request-unlock` | Child explanation / review request |
+| `POST /api/incidents/:id/request-unlock` | Child explanation/review request |
 | `POST /api/incidents/:id/unlock` | Parent unlock decision |
-| `POST /api/incidents/:id/keep-blocked` | Parent keeps block |
-| `GET /api/daily-report` | Child and parent daily summaries |
+| `POST /api/incidents/:id/keep-blocked` | Parent keeps the block |
+| `GET /api/daily-report` | Parent/child daily summaries |
 | `GET /api/children/:id/policy` | Read family policy |
 | `PUT /api/children/:id/policy` | Update family policy |
 
-The agent additionally consumes the persistent device-command endpoints:
+The host-side agent additionally consumes:
 
-| Method and route | Use |
+| Method and route | Agent use |
 |---|---|
+| `POST /api/incidents` | Persist classified/policy-decided incident |
+| `POST /api/incidents/:id/evidence` | Upload selected minimal evidence |
 | `GET /api/devices/:id/commands` | Poll pending commands |
-| `POST /api/devices/:id/commands/:commandId/ack` | Acknowledge execution |
+| `POST /api/devices/:id/commands/:commandId/ack` | Confirm command execution |
+| `POST /api/devices/:id/telemetry` | Record aggregate telemetry |
 
 ---
 
-## Testing and validation
+# CI and validation
 
-### Backend tests
+Two complementary workflows are kept on the mobile branch:
+
+- `.github/workflows/ci.yml` — shared Python/web contracts, R3 risk regression, lint, format, and tests inherited from `main`;
+- `.github/workflows/android.yml` — Android debug APK build for `main` / `agent/**` changes that touch the Android project.
+
+Useful local checks:
 
 ```bash
-# macOS / Linux
+.venv/bin/python scripts/validate_stage0.py
+.venv/bin/python scripts/run_r3_evals.py --check
+.venv/bin/python -m ruff check .
 .venv/bin/python -m pytest
 ```
 
-```powershell
-# Windows
-.\.venv\Scripts\python.exe -m pytest
-```
-
-Full backend/web development checks:
+With browser tooling installed:
 
 ```bash
-pnpm install
-python scripts/validate_stage0.py
-python -m ruff check .
-python -m ruff format --check agent api guardian_core risk_engine scripts tests
-python -m pytest
 pnpm check:js
 pnpm lint:js
 pnpm format:check
 ```
 
-### Android build validation
+Android:
 
 ```bash
 gradle :android-app:assembleDebug
 ```
 
-The Android GitHub Actions workflow is in:
+---
 
-```text
-.github/workflows/android.yml
-```
+# Security and privacy boundaries
 
-It currently builds with:
+- `RiskAssessment` does not contain an enforcement action.
+- Family policy and runtime release gates decide device actions after classification.
+- Android does not receive provider/API credentials.
+- OpenAI is optional and host-side only in the current mobile port.
+- The deterministic fixture demo remains local and requires no external service.
+- Remote/provider failures must not silently become new blocks.
+- Evidence is incident-scoped and size/type constrained by the API.
+- Debug cleartext transport exists only for local development; release Android builds disable it.
+- Android observation and real enforcement remain disabled.
+- No microphone or camera collection is enabled by this port.
 
-- Ubuntu runner.
-- Temurin JDK 17.
-- Android SDK setup action.
-- Gradle 8.13.
-- `gradle :android-app:assembleDebug`.
+This MVP is not production compliance. Deployment involving minors still requires authentication and authorization, family/tenant isolation, encryption and key management, retention/deletion guarantees, consent/guardian flows, LGPD/COPPA review, tamper resistance, auditability, notification design, and formal false-positive/false-negative evaluation.
 
 ---
 
-## Backend configuration
+# Known limitations
 
-Environment variables are documented in `.env.example`.
+- Android currently acts as the native family UI/control client, not the observation/enforcement agent.
+- The optional real screenshot demo is macOS-specific.
+- The OpenAI provider is optional; the deterministic fixture path remains the reproducible baseline.
+- Device pairing is registration only and does not activate Android collection.
+- Authentication, push notifications, multiple families, and public deployment are not implemented.
+- The current branch still uses polling for host device commands.
 
-| Variable | Default | Purpose |
-|---|---|---|
-| `GUARDIAN_ENVIRONMENT` | `development` | Typed runtime environment |
-| `GUARDIAN_API_URL` | `http://127.0.0.1:8000` | API used by the Python agent |
-| `GUARDIAN_DB_PATH` | `.data/guardian.db` | Local SQLite database |
-| `GUARDIAN_EVIDENCE_DIR` | `.data/evidence` | Selected incident evidence |
-| `GUARDIAN_LOG_LEVEL` | `INFO` | Logging level without raw observed content |
-| `GUARDIAN_AUTOMATIC_BLOCKING_ENABLED` | `true` in demo | Enables blocking within release gates |
-| `GUARDIAN_REAL_ENFORCEMENT_ENABLED` | `false` | Explicit gate for the existing macOS enforcer |
-| `GUARDIAN_RELEASE_GATE_APPROVED` | `false` | Required gate outside development/test |
-| `GUARDIAN_BLOCKABLE_APPS` | `Guardian Demo Chat` | Allowlist for existing macOS real enforcement |
+See also:
 
-Demo data uses `child-demo` and `device-demo`. Runtime database, evidence, and agent state are stored under `.data/`, which is ignored by Git.
-
-The Android app stores only its configured API URL and selected/paired device ID in local application preferences.
-
----
-
-## Security and privacy invariants
-
-- `RiskAssessment` contains no enforcement action.
-- `SAFE` assessments cannot create safety incidents.
-- Family policy deterministically converts risk into an action.
-- Technical failure is fail-open: errors do not create a new block.
-- Automatic blocking outside controlled local conditions is restricted by release gates.
-- Real enforcement is deny-by-default and requires explicit configuration.
-- Evidence accepts only PNG, JPEG, WebP, or text, with a 4 MB maximum.
-- Evidence file paths are generated and validated server-side.
-- Observed content is treated as untrusted data.
-- The Android port collects no microphone or camera data.
-- The Android port currently performs no continuous screen capture.
-- Release Android builds disable cleartext HTTP.
-
-This MVP is **not production compliance**. Real deployment for minors requires authentication, family/device authorization, encryption, retention/deletion controls, appropriate consent, LGPD/COPPA review, auditability, anti-tamper design, abuse-resistance testing, and formal false-positive evaluation.
-
----
-
-## Known limitations
-
-- The current risk engine is deterministic and fixture-oriented; a remote multimodal provider is not part of the reproducible MVP.
-- Android real-time observation is not implemented.
-- Android application enforcement is not implemented.
-- Android device pairing does not yet create a persistent Android background agent.
-- The shared command protocol currently uses polling.
-- There is no authentication or tenant isolation.
-- There are no push notifications or multiple-family accounts.
-- The backend still contains the original browser UI for development/debugging.
-- The current screen hash is cryptographic rather than perceptual.
-
----
-
-## Further documentation
-
-- [`ROADMAP.md`](ROADMAP.md) — path from MVP toward production.
-- [`docs/README.md`](docs/README.md) — engineering/security documentation index.
-- [`docs/adr/0005-android-mobile-client.md`](docs/adr/0005-android-mobile-client.md) — Android architecture decision.
-- [`docs/security/threat-model.md`](docs/security/threat-model.md) — threat model.
-- [`docs/privacy/data-map.md`](docs/privacy/data-map.md) — data map.
-- [`guardian_hackathon_context.md`](guardian_hackathon_context.md) — original product and hackathon context.
+- [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md)
+- [`docs/product/demo-runbook.md`](docs/product/demo-runbook.md)
+- [`docs/adr/0005-android-mobile-client.md`](docs/adr/0005-android-mobile-client.md)
+- [`docs/product/release-gates.md`](docs/product/release-gates.md)
+- [`docs/security/threat-model.md`](docs/security/threat-model.md)
+- [`docs/privacy/data-map.md`](docs/privacy/data-map.md)
