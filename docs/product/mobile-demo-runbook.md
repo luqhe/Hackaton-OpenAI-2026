@@ -1,185 +1,165 @@
-# Android mobile demo runbook
+# Android mobile demo runbook — R2 secure Family model
 
-This runbook adapts the current Guardian demo flow to the maintained Android branch, `agent/android-mobile-port`.
+This runbook is the presentation path for `agent/android-mobile-port` after synchronization with the R2 Family/Device security model.
 
-The Android application is the **parent/family review interface**. Risk classification, calibration, policy evaluation, incident creation, evidence persistence, and host command execution remain backend/host responsibilities.
+The Android application is the **Family review client**. The synthetic host fixture uses `device-demo`. Android does not become the protected Device and does not receive a Device credential.
 
-## Demo modes
+## Demo security model
 
-### Recommended: deterministic fixture + Android review
-
-This is the portable, reproducible mobile demo.
-
-- no OpenAI key;
-- no external service;
-- no elevated Android permission;
-- no Android screen capture;
-- no real Android enforcement.
+The demo is intentionally explicit and local-only:
 
 ```text
-controlled fixture
-    ↓
-shared Python risk + calibration + policy pipeline
-    ↓
-Guardian API incident
-    ↓
-Android parent review
-    ↓
-unlock / keep blocked
-    ↓
-host demo-agent command acknowledgement
+GUARDIAN_DEMO_MODE=true on API
+              +
+X-Guardian-Demo: true from Android/fixture client
+              +
+local transport only
+              ↓
+synthetic family-demo / child-demo / device-demo scope
 ```
 
-### Optional: macOS observation + Android review
+The backend rejects this demo scope outside development/test and rejects it over non-local transport.
 
-The synchronized host runtime also supports controlled one-shot and continuous macOS observation paths.
-
-- capture/observation occurs on macOS;
-- optional OpenAI provider calls occur from Python on the host;
-- `OPENAI_API_KEY` stays on the host;
-- Android reviews the resulting incident through the same API;
-- Android does not inherit macOS capture, OCR, Accessibility, or enforcement capabilities.
-
-See `docs/product/macos-permissions.md` before enabling host observation.
+For Android, use ADB reverse instead of exposing the demo server to the LAN.
 
 ---
 
-# Preparation
+## Before the rehearsal
 
-## 1. Check out the mobile branch
+At the repository root:
 
 ```bash
-git fetch origin
 git switch agent/android-mobile-port
 git pull
-```
-
-## 2. Bootstrap Python
-
-### macOS / Linux
-
-```bash
 bash scripts/bootstrap.sh
 ```
 
-### Windows PowerShell
-
-```powershell
-.\scripts\bootstrap.ps1
-```
-
-## 3. Reset old demo state
-
-With the API stopped:
-
-### macOS / Linux
-
-```bash
-bash scripts/reset-demo.sh
-```
-
-### Windows PowerShell
-
-```powershell
-.\scripts\reset-demo.ps1
-```
-
-## 4. Verify the current risk regression gate
+Optional quality gate:
 
 ```bash
 .venv/bin/python scripts/run_r3_evals.py --check
 ```
 
-For the complete repository check, install the Node/pnpm dependencies and run `scripts/check.sh` or `scripts/check.ps1`.
+Stop old Guardian processes, then reset local state:
 
-## 5. Prepare Android
-
-Use an Android Emulator for the simplest presentation path.
-
-Expected Android toolchain:
-
-- JDK 17;
-- Android SDK 36;
-- Gradle 8.13 for command-line builds;
-- `android-app` as the application module.
-
-The emulator app defaults to:
-
-```text
-http://10.0.2.2:8000
+```bash
+bash scripts/reset-demo.sh
 ```
 
-Keep the mobile app configured for `device-demo` during the canned demo so it refers to the same device as the host-side fixture launcher.
+On Windows use the corresponding `.ps1` bootstrap/reset scripts.
+
+Prepare:
+
+- Android Emulator or USB-connected Android device;
+- JDK 17;
+- Android SDK 36;
+- Gradle 8.13 or Android Studio;
+- `adb` available on the host.
+
+No OpenAI key is required for the recommended deterministic demo.
 
 ---
 
-# Deterministic Android demo
+# Recommended deterministic demo
 
-## Terminal 1 — start the API
+## 1. Start the secure demo API
 
-### macOS / Linux
+Terminal 1 — macOS/Linux:
 
 ```bash
-bash scripts/run-api.sh
+bash scripts/run-mobile-demo-api.sh
 ```
 
-### Windows PowerShell
+Windows:
 
 ```powershell
-.\scripts\run-api.ps1
+.\scripts\run-mobile-demo-api.ps1
 ```
 
-Host endpoints:
+This launcher sets:
+
+```text
+GUARDIAN_ENVIRONMENT=development
+GUARDIAN_DEMO_MODE=true
+GUARDIAN_API_URL=http://127.0.0.1:8000
+```
+
+and binds FastAPI to host loopback only.
+
+Verify on the host:
+
+```text
+http://127.0.0.1:8000/api/health
+```
+
+## 2. Reverse Android port 8000 to the host
+
+With the emulator/device connected:
+
+```bash
+adb reverse tcp:8000 tcp:8000
+```
+
+The Android client now reaches host FastAPI by using its own:
 
 ```text
 http://127.0.0.1:8000
-http://127.0.0.1:8000/api/health
-http://127.0.0.1:8000/docs
-http://127.0.0.1:8000/demo-chat
 ```
 
-## Android — start the app
+This is important. Do not use LAN binding for the synthetic demo; the R2 backend deliberately restricts demo identity to local transport.
 
-Build/run from Android Studio, or build the debug APK with:
+## 3. Build/run Android
+
+Android Studio is recommended. Alternatively:
 
 ```bash
 gradle :android-app:assembleDebug
+adb install -r android-app/build/outputs/apk/debug/android-app-debug.apk
 ```
 
-In **Conexão** confirm:
+## 4. Configure Android demo scope
+
+Open **Configuração** and set:
 
 ```text
-API: http://10.0.2.2:8000
-device: device-demo
+API URL: http://127.0.0.1:8000
+Modo de demonstração local: ON
+Child ID: child-demo
 ```
 
-Use the connection check before starting the incident.
+If necessary tap **Usar Device demo**.
 
-## Terminal 2 — trigger the fixture
+The app validates demo scope through `/api/auth/session`. When accepted, it operates inside synthetic `family-demo` without a password.
 
-### macOS / Linux
+Do not enter real credentials in demo mode.
+
+## 5. Trigger the controlled fixture
+
+Terminal 2 — macOS/Linux:
 
 ```bash
-bash scripts/run-demo.sh
+bash scripts/run-mobile-demo.sh
 ```
 
-### Windows PowerShell
+Windows:
 
 ```powershell
-.\scripts\run-demo.ps1
+.\scripts\run-mobile-demo.ps1
 ```
 
-Expected host behavior:
+The launcher sets the same explicit demo environment. The host HTTP client reads `GUARDIAN_DEMO_MODE` and adds `X-Guardian-Demo: true` only to legacy synthetic demo requests.
+
+Expected stages:
 
 1. `fixtures/dangerous_contact/session.json` is loaded.
-2. The recent context is classified.
-3. Calibration/risk controls and family policy remain separate from classification.
+2. Contextual risk is evaluated.
+3. Family policy is evaluated separately from classification.
 4. Runtime release gates are applied.
-5. The block is simulated.
-6. The incident and minimal evidence are persisted.
-7. The host agent waits for a parent command.
+5. `device-demo` receives simulated enforcement state.
+6. An incident is persisted in `family-demo` with minimal evidence.
+7. The host waits for the family decision.
 
-Useful terminal lines include:
+Useful terminal output:
 
 ```text
 assessment=...
@@ -189,178 +169,165 @@ parent_view=...
 child_view=...
 ```
 
-## Android — review and decide
+## 6. Review on Android
 
-1. Open **Início**.
-2. Tap **Atualizar** if the incident is not already listed.
-3. Open the incident.
-4. Review category, confidence, explanation, evidence summary, and status.
-5. Choose **Desbloquear aplicativo** or **Manter bloqueado**.
+In the Android app:
 
-When unlock is chosen, the backend creates an `UNLOCK_APPLICATION` command for `device-demo`.
+1. open **Início**;
+2. tap **Atualizar** if necessary;
+3. open the new incident;
+4. review category, confidence, application, evidence summary and Device ID;
+5. choose **Desbloquear aplicativo** or **Manter bloqueado**.
 
-Terminal 2 should eventually confirm:
+Android sends family mutations in explicit demo scope. The server keeps that authorization restricted to the local synthetic environment.
+
+On unlock, Terminal 2 should eventually print:
 
 ```text
 unlocked=Guardian Demo Chat command=<id>
 ```
 
-That line completes the end-to-end command cycle.
-
----
-
-# Optional host visual demo with Android as parent UI
-
-This mode currently requires a macOS host.
-
-## Requirements
-
-- Guardian API running locally;
-- controlled synthetic demo content;
-- required macOS capture permissions;
-- an OpenAI API key if the optional OpenAI path is used.
-
-Set the key on the host only:
-
-```bash
-export OPENAI_API_KEY="..."
-```
-
-Do not put it in Android settings, Gradle configuration, source code, or APK resources.
-
-Open the controlled chat:
+That demonstrates the complete mobile vertical slice:
 
 ```text
-http://127.0.0.1:8000/demo-chat
+controlled fixture
+      ↓
+shared risk + policy pipeline
+      ↓
+Family-scoped incident
+      ↓
+Android family review
+      ↓
+persistent unlock command
+      ↓
+host demo-agent acknowledgement
 ```
 
-Then trigger:
+## 7. End the demo
 
-```bash
-bash scripts/run-live-demo.sh
-```
+Turn **Modo de demonstração local** off in Android.
 
-The launcher reports its source/mode explicitly and may fall back to the deterministic fixture path. If a visual incident is created, refresh Android and review it through the same incident contract.
-
-The current Android UI reports when visual evidence is available on the server; it does not introduce Android capture or an image-loading dependency.
-
-## Optional continuous host observation
-
-The latest synchronized host runtime also provides:
-
-```bash
-.venv/bin/python -m agent.main observe
-```
-
-That path uses the host/macOS observation stack, including adaptive scheduling, temporal context buffering, ephemeral evidence, durable state, offline outbox, heartbeat, diagnostics, and recovery behavior.
-
-This does **not** turn the Android app into an observer.
-
----
-
-# Physical Android device
-
-A physical phone cannot use emulator alias `10.0.2.2`.
-
-Bind the API to the development machine's network interface:
-
-### macOS / Linux
-
-```bash
-.venv/bin/python -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-### Windows PowerShell
-
-```powershell
-.\.venv\Scripts\python.exe -m uvicorn api.main:app --host 0.0.0.0 --port 8000 --reload
-```
-
-Configure Android with the host LAN address, for example:
-
-```text
-http://192.168.1.50:8000
-```
-
-Checklist:
-
-- phone and development machine are on the same trusted network;
-- TCP port 8000 is allowed through the host firewall;
-- wireless client isolation is disabled;
-- the app is a debug build if using local cleartext HTTP.
-
-Use HTTPS outside trusted local development.
-
----
-
-# Android device pairing and heartbeat
-
-The Android app can register itself through:
-
-```http
-POST /api/devices/pair
-```
-
-The returned device ID is persisted locally.
-
-For an actually paired Android record, the client also calls:
-
-```http
-POST /api/devices/:id/heartbeat
-```
-
-The heartbeat updates liveness while deliberately reporting the current mobile boundary:
-
-```text
-screen_recording_permission = false
-accessibility_permission    = false
-observer_healthy            = false
-offline_queue_depth         = 0
-```
-
-Pairing + heartbeat do **not** activate Android observation, screen capture, OCR, Accessibility, or enforcement.
-
-For the canned host-agent demo, use **Conexão → Usar dispositivo demo** so Android and `scripts/run-demo.sh` both target `device-demo`. Android does not heartbeat that legacy demo record.
-
----
-
-# Failure recovery
-
-## Android cannot reach the API
-
-- Emulator: verify `http://10.0.2.2:8000`.
-- Physical device: verify the LAN IP, `0.0.0.0` binding, firewall, and network isolation.
-- Confirm `http://127.0.0.1:8000/api/health` works on the host.
-
-## Old or duplicate incident
-
-Stop the API, reset state, restart it, and repeat:
+Stop the API, then reset before another clean rehearsal:
 
 ```bash
 bash scripts/reset-demo.sh
 ```
 
-## Optional host observation fails
+---
 
-Keep the error visible and use the deterministic fixture path. The fixture path is an explicit supported demo source, not a hidden degraded mode.
+# Normal authenticated Android flow
 
-## Android is paired to a different device
+This is separate from the synthetic demo.
 
-Use **Conexão → Usar dispositivo demo** before running the canned fixture.
+Prerequisites:
+
+- reachable Guardian API;
+- HTTPS outside loopback development;
+- an existing Account;
+- an active Membership in the intended Family;
+- a Child ID inside that Family.
+
+Android steps:
+
+1. open **Configuração**;
+2. ensure demo mode is OFF;
+3. configure the API URL;
+4. open **Entrar**;
+5. enter Account email/password;
+6. provide `family_id` if the Account has more than one active Family Membership;
+7. configure the intended Child ID.
+
+The server returns `guardian_session` and `guardian_csrf`. Android keeps both in memory and sends the CSRF value on mutations. Process restart requires login again.
+
+A `401` clears the local in-memory session.
+
+---
+
+# Protected Device pairing from Android
+
+Android is the Family client, not the Device.
+
+From an authenticated Family session:
+
+1. choose **Criar código de pareamento**;
+2. Android calls `POST /api/pairing/challenges` for the selected Child;
+3. Android displays the short code and expiry;
+4. the protected Device generates its own key material;
+5. the Device submits the challenge/code + public key to `POST /api/device/pair`;
+6. the backend issues a Device credential;
+7. the Device stores that credential and uses signed `/api/agent/*` requests.
+
+The Android Family app never receives or stores the protected Device secret.
+
+Do not describe the pairing-code action as “pair this Android”. It creates authorization for another protected endpoint to enroll.
+
+---
+
+# Optional host-side visual demo
+
+The shared branch still supports richer macOS-host observation/classification. Android can remain the Family review UI.
+
+For the optional controlled visual path, follow the shared host documentation and keep provider credentials on the host. If that path creates an incident in the same Family/Child scope, refresh Android and review it normally.
+
+This does not grant Android screen-capture or enforcement capability.
+
+---
+
+# Failure recovery
+
+## Android reports unauthorized
+
+For the synthetic demo confirm all three conditions:
+
+1. API was started with `scripts/run-mobile-demo-api.*`;
+2. Android local demo mode is ON;
+3. `adb reverse tcp:8000 tcp:8000` is active and API URL is `http://127.0.0.1:8000`.
+
+Do not work around a demo `401` by opening the API to the LAN or disabling authentication.
+
+For normal mode, log in again and verify the Account has an active Membership in the intended Family.
+
+## Fixture launcher receives 401/403
+
+Use `scripts/run-mobile-demo.*`, not the generic launcher, so `GUARDIAN_DEMO_MODE=true` is explicit in the agent process.
+
+## No incident appears
+
+- verify `Child ID = child-demo` during demo;
+- select `device-demo` if necessary;
+- tap **Atualizar**;
+- stop/reset the API if stale demo state caused deduplication.
+
+## ADB reverse is missing
+
+List forwarding state:
+
+```bash
+adb reverse --list
+```
+
+Recreate it:
+
+```bash
+adb reverse tcp:8000 tcp:8000
+```
+
+## Port 8000 is busy
+
+Stop the old local API. Do not switch the synthetic demo to a public/LAN host merely to avoid the collision.
 
 ---
 
 # Presentation boundaries
 
-State these accurately during the mobile demo:
+State these accurately during the demo:
 
-- Android is native Compose, not a WebView wrapper.
-- Android does not contain the risk engine or provider credentials.
-- Classification, calibration, and policy occur in the shared Python pipeline.
-- The standard Android demo is deterministic and local.
-- OpenAI and richer observation paths are host-side.
-- The synchronized native Swift helper and macOS packaging are host capabilities, not Android capabilities.
-- Paired Android devices provide registration/liveness only in this slice.
-- Android has no continuous observation or real enforcement capability.
-- Android requests only internet access.
-- Real Android enforcement requires a separate architecture decision and release gate.
+- Android is a native Family client, not a WebView.
+- Android authenticates Family/Membership scope in normal mode.
+- Demo identity is explicit, synthetic, local-only and disabled in staging/production.
+- The Android app does not hold protected Device credentials.
+- The protected Device protocol uses separate signed credentials and replay protection.
+- Risk/classifier logic and provider credentials stay on the shared backend/host.
+- Android requests only internet permission.
+- Android currently performs no continuous observation and no real enforcement.
+- Evidence, audit, rate limits and data lifecycle are shared backend controls inherited from `main`.
