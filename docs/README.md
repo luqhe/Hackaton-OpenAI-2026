@@ -6,6 +6,11 @@ Este diretório contém os artefatos normativos usados para implementar e libera
 
 - [Gates de risco e lançamento](product/release-gates.md)
 
+## Inteligência contextual
+
+- [Pipeline, evals e shadow mode do R3](risk/r3-contextual-pipeline.md)
+- [Guia de anotação](risk/annotation-guide.md)
+
 ## Segurança e privacidade
 
 - [Threat model](security/threat-model.md)

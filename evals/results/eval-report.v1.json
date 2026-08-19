@@ -27,10 +27,10 @@
   },
   "by_category": {
     "ADULT_CONTENT": {
-      "support": 2,
+      "support": 13,
       "true_positive": 2,
       "false_positive": 0,
-      "true_negative": 0,
+      "true_negative": 11,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,
@@ -40,10 +40,10 @@
       "direction_accuracy": 1.0
     },
     "DANGEROUS_CONTACT": {
-      "support": 5,
+      "support": 13,
       "true_positive": 5,
       "false_positive": 0,
-      "true_negative": 0,
+      "true_negative": 8,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,
@@ -53,10 +53,23 @@
       "direction_accuracy": 1.0
     },
     "HATE_SPEECH": {
-      "support": 2,
+      "support": 13,
       "true_positive": 2,
       "false_positive": 0,
-      "true_negative": 0,
+      "true_negative": 11,
+      "false_negative": 0,
+      "precision": 1.0,
+      "recall": 1.0,
+      "false_positive_rate": 0.0,
+      "risk_accuracy": 1.0,
+      "category_accuracy": 1.0,
+      "direction_accuracy": 1.0
+    },
+    "OTHER": {
+      "support": 13,
+      "true_positive": 0,
+      "false_positive": 0,
+      "true_negative": 13,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,
@@ -66,10 +79,10 @@
       "direction_accuracy": 1.0
     },
     "SAFE": {
-      "support": 4,
-      "true_positive": 0,
+      "support": 13,
+      "true_positive": 4,
       "false_positive": 0,
-      "true_negative": 4,
+      "true_negative": 9,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,
@@ -293,10 +306,10 @@
   },
   "by_direction": {
     "CHILD_AS_ACTOR": {
-      "support": 1,
+      "support": 13,
       "true_positive": 1,
       "false_positive": 0,
-      "true_negative": 0,
+      "true_negative": 12,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,
@@ -306,10 +319,10 @@
       "direction_accuracy": 1.0
     },
     "CHILD_AS_TARGET": {
-      "support": 6,
+      "support": 13,
       "true_positive": 6,
       "false_positive": 0,
-      "true_negative": 0,
+      "true_negative": 7,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,
@@ -319,10 +332,10 @@
       "direction_accuracy": 1.0
     },
     "CONTENT_CONSUMPTION": {
-      "support": 2,
+      "support": 13,
       "true_positive": 2,
       "false_positive": 0,
-      "true_negative": 0,
+      "true_negative": 11,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,
@@ -332,10 +345,10 @@
       "direction_accuracy": 1.0
     },
     "NONE": {
-      "support": 4,
-      "true_positive": 0,
+      "support": 13,
+      "true_positive": 4,
       "false_positive": 0,
-      "true_negative": 4,
+      "true_negative": 9,
       "false_negative": 0,
       "precision": 1.0,
       "recall": 1.0,

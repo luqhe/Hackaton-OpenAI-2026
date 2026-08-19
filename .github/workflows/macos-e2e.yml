@@ -1,0 +1,27 @@
+name: macOS E2E
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  permissioned-e2e:
+    name: Permissioned capture and intervention
+    runs-on: [self-hosted, macOS, guardian-e2e]
+    timeout-minutes: 15
+    env:
+      GUARDIAN_MACOS_E2E: "1"
+      GUARDIAN_ENVIRONMENT: test
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: python -m pip install -e ".[dev]"
+      - name: Build native helper
+        run: swift build --package-path native/GuardianCaptureHelper
+      - name: Run permissioned E2E
+        run: python -m pytest -m macos_e2e tests/macos/test_macos_e2e.py

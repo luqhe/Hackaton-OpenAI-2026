@@ -96,6 +96,9 @@ class RegressionGate(BaseModel):
     schema_version: str = "guardian.eval-gate.v1"
     gate_version: str
     dataset_version: str
+    dataset_sha256: str = Field(min_length=64, max_length=64)
+    model_version: str
+    prompt_version: str
     split: Literal["test"] = "test"
     minimum_precision: float = Field(ge=0, le=1)
     minimum_recall: float = Field(ge=0, le=1)
@@ -127,18 +130,23 @@ def load_dataset(path: Path) -> tuple[list[EvalExample], str]:
 
 def _metric_slice(
     pairs: Iterable[tuple[EvalExample, RiskAssessment | None]],
+    *,
+    expected_positive: Callable[[EvalExample], bool] | None = None,
+    predicted_positive: Callable[[RiskAssessment], bool] | None = None,
 ) -> MetricSlice:
     materialized = list(pairs)
     true_positive = false_positive = true_negative = false_negative = 0
     exact_risk = exact_category = exact_direction = expected_category_total = 0
+    expected_test = expected_positive or (lambda example: example.expected_risk != RiskLevel.SAFE)
+    predicted_test = predicted_positive or (lambda prediction: prediction.risk != RiskLevel.SAFE)
     for example, prediction in materialized:
-        expected_positive = example.expected_risk != RiskLevel.SAFE
-        predicted_positive = prediction is not None and prediction.risk != RiskLevel.SAFE
-        if expected_positive and predicted_positive:
+        expected_is_positive = expected_test(example)
+        predicted_is_positive = prediction is not None and predicted_test(prediction)
+        if expected_is_positive and predicted_is_positive:
             true_positive += 1
-        elif expected_positive:
+        elif expected_is_positive:
             false_negative += 1
-        elif predicted_positive:
+        elif predicted_is_positive:
             false_positive += 1
         else:
             true_negative += 1
@@ -180,6 +188,44 @@ def _group_metrics(
     return {name: _metric_slice(items) for name, items in sorted(grouped.items())}
 
 
+def _category_metrics(
+    pairs: list[tuple[EvalExample, RiskAssessment | None]],
+) -> dict[str, MetricSlice]:
+    metrics = {
+        category.value: _metric_slice(
+            pairs,
+            expected_positive=lambda example, current=category: example.expected_category == current,
+            predicted_positive=lambda prediction, current=category: prediction.category == current,
+        )
+        for category in RiskCategory
+    }
+    metrics["SAFE"] = _metric_slice(
+        pairs,
+        expected_positive=lambda example: example.expected_risk == RiskLevel.SAFE,
+        predicted_positive=lambda prediction: prediction.risk == RiskLevel.SAFE,
+    )
+    return dict(sorted(metrics.items()))
+
+
+def _direction_metrics(
+    pairs: list[tuple[EvalExample, RiskAssessment | None]],
+) -> dict[str, MetricSlice]:
+    metrics = {
+        direction.value: _metric_slice(
+            pairs,
+            expected_positive=lambda example, current=direction: example.expected_direction == current,
+            predicted_positive=lambda prediction, current=direction: prediction.direction == current,
+        )
+        for direction in RiskDirection
+    }
+    metrics["NONE"] = _metric_slice(
+        pairs,
+        expected_positive=lambda example: example.expected_direction is None,
+        predicted_positive=lambda prediction: prediction.direction is None,
+    )
+    return dict(sorted(metrics.items()))
+
+
 def evaluate_dataset(
     dataset_path: Path,
     classifier: Callable[[Observation], RiskAssessment],
@@ -209,16 +255,10 @@ def evaluate_dataset(
         invalid_outputs=invalid_outputs,
         invalid_output_rate=invalid_outputs / len(selected) if selected else 0.0,
         overall=_metric_slice(pairs),
-        by_category=_group_metrics(
-            pairs,
-            lambda item: item.expected_category.value if item.expected_category else "SAFE",
-        ),
+        by_category=_category_metrics(pairs),
         by_age_band=_group_metrics(pairs, lambda item: item.age_band),
         by_application=_group_metrics(pairs, lambda item: item.application),
-        by_direction=_group_metrics(
-            pairs,
-            lambda item: item.expected_direction.value if item.expected_direction else "NONE",
-        ),
+        by_direction=_direction_metrics(pairs),
     )
 
 
@@ -230,6 +270,12 @@ def regression_failures(report: EvaluationReport, gate: RegressionGate) -> list[
     failures: list[str] = []
     if report.versions.dataset != gate.dataset_version:
         failures.append("Dataset version does not match the frozen regression gate")
+    if report.dataset_sha256 != gate.dataset_sha256:
+        failures.append("Dataset content changed without a new frozen regression gate")
+    if report.versions.model != gate.model_version:
+        failures.append("Model version does not match the frozen regression gate")
+    if report.versions.prompt != gate.prompt_version:
+        failures.append("Prompt version does not match the frozen regression gate")
     if report.split != gate.split:
         failures.append("Regression gate must run only on the frozen final test split")
     if report.overall.precision < gate.minimum_precision:

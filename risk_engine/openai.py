@@ -38,6 +38,10 @@ class OpenAITransientRiskError(OpenAIRiskError):
     retryable = True
 
 
+class OpenAIInvalidRiskError(OpenAIRiskError):
+    """The provider responded, but its output cannot enter policy evaluation."""
+
+
 RISK_ASSESSMENT_SCHEMA: dict[str, Any] = {
     "type": "object",
     "additionalProperties": False,
@@ -134,13 +138,13 @@ def _read_response(response: Any) -> dict[str, Any]:
         raise OpenAIRiskError(f"OpenAI returned HTTP {status}")
     raw_body = response.read(MAX_RESPONSE_BYTES + 1)
     if len(raw_body) > MAX_RESPONSE_BYTES:
-        raise OpenAIRiskError("OpenAI response is too large")
+        raise OpenAIInvalidRiskError("OpenAI response is too large")
     try:
         payload = json.loads(raw_body)
     except (UnicodeDecodeError, json.JSONDecodeError, TypeError) as error:
-        raise OpenAIRiskError("OpenAI returned invalid JSON") from error
+        raise OpenAIInvalidRiskError("OpenAI returned invalid JSON") from error
     if not isinstance(payload, dict):
-        raise OpenAIRiskError("OpenAI returned an invalid response")
+        raise OpenAIInvalidRiskError("OpenAI returned an invalid response")
     return payload
 
 
@@ -148,12 +152,12 @@ def _extract_assessment(payload: dict[str, Any]) -> RiskAssessment:
     status = payload.get("status")
     if status != "completed":
         if status == "incomplete":
-            raise OpenAIRiskError("OpenAI response was incomplete")
+            raise OpenAIInvalidRiskError("OpenAI response was incomplete")
         raise OpenAIRiskError("OpenAI risk analysis failed")
 
     output = payload.get("output")
     if not isinstance(output, list):
-        raise OpenAIRiskError("OpenAI returned an invalid response")
+        raise OpenAIInvalidRiskError("OpenAI returned an invalid response")
 
     output_text: list[str] = []
     for output_item in output:
@@ -170,13 +174,13 @@ def _extract_assessment(payload: dict[str, Any]) -> RiskAssessment:
             if content_item.get("type") == "output_text" and isinstance(content_item.get("text"), str):
                 output_text.append(content_item["text"])
     if not output_text:
-        raise OpenAIRiskError("OpenAI returned no risk assessment")
+        raise OpenAIInvalidRiskError("OpenAI returned no risk assessment")
 
     try:
         assessment_payload = json.loads("".join(output_text))
         return RiskAssessment.model_validate(assessment_payload)
     except (json.JSONDecodeError, TypeError, ValidationError) as error:
-        raise OpenAIRiskError("OpenAI returned an invalid RiskAssessment") from error
+        raise OpenAIInvalidRiskError("OpenAI returned an invalid RiskAssessment") from error
 
 
 def assess_context(

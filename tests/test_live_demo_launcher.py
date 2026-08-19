@@ -5,8 +5,13 @@ import shutil
 import subprocess
 from pathlib import Path
 
+import pytest
+
 ROOT = Path(__file__).resolve().parents[1]
 LAUNCHER = ROOT / "scripts" / "run-live-demo.sh"
+BASH = Path("/bin/bash")
+
+pytestmark = pytest.mark.skipif(not BASH.is_file(), reason="launcher test requires /bin/bash")
 
 
 def write_executable(path: Path, contents: str) -> None:
@@ -67,7 +72,7 @@ printf 'source=OPENAI\\n'
     environment["OPEN_LOG"] = str(open_log)
     environment["PATH"] = f"{command_bin}:/usr/bin:/bin"
     result = subprocess.run(
-        ["/bin/bash", str(scripts / LAUNCHER.name)],
+        [str(BASH), str(scripts / LAUNCHER.name)],
         cwd=project,
         env=environment,
         text=True,

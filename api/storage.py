@@ -16,6 +16,7 @@ from guardian_core.models import (
     DailyReport,
     Device,
     DeviceCommand,
+    DeviceHeartbeat,
     DevicePairRequest,
     EnforcementAction,
     Incident,
@@ -246,6 +247,22 @@ class GuardianStore:
             )
             if cursor.rowcount == 0:
                 raise KeyError(device_id)
+
+    def record_heartbeat(self, device_id: str, heartbeat: DeviceHeartbeat) -> Device:
+        healthy = (
+            heartbeat.screen_recording_permission
+            and heartbeat.accessibility_permission
+            and heartbeat.observer_healthy
+        )
+        protection_status = "PROTECTED" if healthy else "DEGRADED"
+        with self.connect() as connection:
+            cursor = connection.execute(
+                "UPDATE devices SET last_seen_at = ?, protection_status = ? WHERE id = ?",
+                (heartbeat.observed_at.isoformat(), protection_status, device_id),
+            )
+            if cursor.rowcount == 0:
+                raise KeyError(device_id)
+        return self.get_device(device_id)
 
     def get_policy(self, child_id: str) -> list[PolicyRule]:
         with self.connect() as connection:
