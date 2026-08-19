@@ -29,8 +29,7 @@ def run_launcher(
     virtualenv_bin.mkdir(parents=True)
     command_bin.mkdir()
 
-    if LAUNCHER.exists():
-        shutil.copy2(LAUNCHER, scripts / LAUNCHER.name)
+    shutil.copy2(LAUNCHER, scripts / LAUNCHER.name)
 
     live_error = "printf 'live-demo-error\\n' >&2\n" if live_exit_code else ""
     write_executable(
