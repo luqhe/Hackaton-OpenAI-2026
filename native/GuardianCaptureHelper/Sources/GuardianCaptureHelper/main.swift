@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import CoreGraphics
 import CoreMedia
 import Foundation
@@ -85,6 +86,39 @@ struct DisplayDescriptor: Encodable {
     let isMain: Bool
     let isOnline: Bool
     let isAsleep: Bool
+}
+
+struct PermissionStatus: Encodable {
+    let screenRecording: Bool
+    let accessibility: Bool
+    let ready: Bool
+
+    init(screenRecording: Bool, accessibility: Bool) {
+        self.screenRecording = screenRecording
+        self.accessibility = accessibility
+        ready = screenRecording && accessibility
+    }
+}
+
+struct PermissionService {
+    func status(requestIfNeeded: Bool) -> PermissionStatus {
+        let screenRecording = requestIfNeeded
+            ? CGRequestScreenCaptureAccess()
+            : CGPreflightScreenCaptureAccess()
+        let accessibility: Bool
+        if requestIfNeeded {
+            let options = [
+                kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true
+            ] as CFDictionary
+            accessibility = AXIsProcessTrustedWithOptions(options)
+        } else {
+            accessibility = AXIsProcessTrusted()
+        }
+        return PermissionStatus(
+            screenRecording: screenRecording,
+            accessibility: accessibility
+        )
+    }
 }
 
 struct ActiveWindow: Encodable {
@@ -180,6 +214,18 @@ struct GuardianCaptureHelper {
                 let payload = try encoder.encode(displays)
                 FileHandle.standardOutput.write(payload)
                 FileHandle.standardOutput.write(Data("\n".utf8))
+            case "permissions":
+                guard arguments.count == 2 || (arguments.count == 3 && arguments[2] == "--request") else {
+                    throw ValidationError(usage)
+                }
+                let status = PermissionService().status(requestIfNeeded: arguments.count == 3)
+                let encoder = JSONEncoder()
+                encoder.outputFormatting = [.sortedKeys]
+                FileHandle.standardOutput.write(try encoder.encode(status))
+                FileHandle.standardOutput.write(Data("\n".utf8))
+                if !status.ready {
+                    Foundation.exit(2)
+                }
             case "active-window":
                 guard arguments.count == 2 else {
                     throw ValidationError(usage)
@@ -210,6 +256,7 @@ struct GuardianCaptureHelper {
     Usage:
       guardian-capture-helper capture /absolute/path/frame.png [--display-id ID]
       guardian-capture-helper displays
+      guardian-capture-helper permissions [--request]
       guardian-capture-helper active-window
       guardian-capture-helper ocr /absolute/path/frame.png
     """

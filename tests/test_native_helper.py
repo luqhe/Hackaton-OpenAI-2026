@@ -48,3 +48,17 @@ def test_native_helper_handles_display_topology_and_sleep() -> None:
     assert "configuration.height = display.height" in source
     assert 'case "displays"' in source
     assert 'arguments[3] == "--display-id"' in source
+
+
+def test_native_helper_has_explicit_permission_onboarding() -> None:
+    source = (HELPER_ROOT / "Sources" / "GuardianCaptureHelper" / "main.swift").read_text(encoding="utf-8")
+    guide = (PROJECT_ROOT / "docs" / "product" / "macos-permissions.md").read_text(encoding="utf-8")
+
+    assert "CGPreflightScreenCaptureAccess" in source
+    assert "CGRequestScreenCaptureAccess" in source
+    assert "AXIsProcessTrustedWithOptions" in source
+    assert 'case "permissions"' in source
+    assert 'arguments[2] == "--request"' in source
+    assert "Gravação da Tela" in guide
+    assert "Acessibilidade" in guide
+    assert "câmera e o microfone não são solicitados" in guide

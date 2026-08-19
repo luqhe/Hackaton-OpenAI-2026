@@ -133,7 +133,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 - [x] `R1-03` Integrar OCR local com Vision.
 - [ ] `R1-04` Expor contrato versionado entre helper Swift e agente Python.
 - [x] `R1-05` Tratar múltiplos monitores, mudança de resolução e suspensão.
-- [ ] `R1-06` Criar onboarding de permissões de Screen Recording e Accessibility/Automation.
+- [x] `R1-06` Criar onboarding de permissões de Screen Recording e Accessibility/Automation.
 - [ ] `R1-07` Detectar permissão ausente ou revogada sem entrar em loop de falha.
 
 ## Épico 1.2 — Observação adaptativa
