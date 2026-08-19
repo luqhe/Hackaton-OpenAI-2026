@@ -1,16 +1,36 @@
 from __future__ import annotations
 
+import hashlib
 import sqlite3
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, status
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from api.stage4_family import create_stage4_family_router
+from api.stage4_incidents import build_stage4_router
+from api.stage4_onboarding import create_stage4_onboarding_router
 from api.storage import GuardianStore
 from guardian_core.config import GuardianSettings
+from guardian_core.family_experience import FamilyExperienceService, InMemoryFamilyExperienceAdapter
+from guardian_core.family_incidents import (
+    AssessmentExplanation,
+    FamilyIncidentService,
+    NotificationOutbox,
+    NotificationPreferences,
+    PolicyExplanation,
+)
+from guardian_core.family_reporting import (
+    FamilyReportingService,
+    InMemoryFamilyReportingAdapter,
+    NotificationChannel,
+    SafetyMetric,
+    SessionSafetyEvent,
+    SessionUpload,
+)
 from guardian_core.models import (
     DailyReport,
     Device,
@@ -22,6 +42,7 @@ from guardian_core.models import (
     IncidentStatus,
     PolicyRule,
     ProductCapabilities,
+    RiskCategory,
     TelemetryUpdate,
     UnlockRequest,
 )
@@ -42,10 +63,62 @@ def create_app(
     db_path = database_path or runtime_settings.database_path
     evidence_path = evidence_directory or runtime_settings.evidence_directory
     store = GuardianStore(db_path, evidence_path)
+    approved_block_categories: set[RiskCategory] = set()
+    family_experience = FamilyExperienceService(
+        adapter=InMemoryFamilyExperienceAdapter(),
+        approved_block_categories=approved_block_categories,
+    )
+    notification_outbox = NotificationOutbox()
+    incident_experience = FamilyIncidentService(notifications=notification_outbox)
+    family_reporting_adapter = InMemoryFamilyReportingAdapter()
+    family_reporting_adapter.add_child("family-demo", "child-demo", "Lucas")
+    family_reporting_adapter.add_device(
+        "family-demo",
+        "child-demo",
+        "device-demo",
+        "MacBook Pro",
+    )
+    family_reporting = FamilyReportingService(family_reporting_adapter)
+    heartbeat_cache: dict[str, DeviceHeartbeat] = {}
+
+    def register_incident_experience(
+        incident: Incident,
+        source: IncidentCreate | None = None,
+    ) -> None:
+        classifier_version = "deterministic-fixture-v1" if source else "legacy-local-v1"
+        matched_rule = source.decision.matched_rule if source else None
+        incident_experience.open_incident(
+            incident_id=incident.id,
+            family_id="family-demo",
+            child_id=incident.child_id,
+            device_id=incident.device_id,
+            detected_at=incident.occurred_at,
+            assessment=AssessmentExplanation(
+                risk=incident.severity,
+                category=incident.category,
+                confidence=incident.confidence,
+                signals=tuple(incident.evidence),
+                classifier_version=classifier_version,
+            ),
+            policy=PolicyExplanation(
+                action=incident.policy_action,
+                rule=source.decision.reason if source else "Política familiar local",
+                threshold=matched_rule.minimum_confidence if matched_rule else 0.0,
+                policy_version="local-policy-v1",
+            ),
+        )
+        family_reporting_adapter.add_incident(
+            "family-demo",
+            incident.child_id,
+            incident.id,
+            classifier_version=classifier_version,
+        )
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         store.initialize()
+        for stored_incident in store.list_incidents("child-demo", 100):
+            register_incident_experience(stored_incident)
         yield
 
     app = FastAPI(
@@ -56,6 +129,58 @@ def create_app(
     )
     app.state.store = store
     app.state.settings = runtime_settings
+    app.state.family_experience = family_experience
+    app.state.family_incident_experience = incident_experience
+    app.state.notification_outbox = notification_outbox
+    app.state.family_reporting = family_reporting
+    app.state.heartbeat_cache = heartbeat_cache
+
+    def configure_notification_outbox(
+        family_id: str,
+        channels: frozenset[NotificationChannel],
+    ) -> None:
+        channel_values = {str(channel) for channel in channels}
+        if "email" in channel_values:
+            preferred = "email"
+        elif "push" in channel_values:
+            preferred = "push"
+        else:
+            preferred = "in_app"
+        notification_outbox.configure(
+            family_id,
+            NotificationPreferences(enabled=True, channel=preferred),
+        )
+
+    def require_local_stage4_preview() -> None:
+        if runtime_settings.environment not in {"development", "test"}:
+            raise HTTPException(
+                status_code=503,
+                detail="Stage 4 preview requires the authenticated Stage 2 identity layer",
+            )
+
+    def current_preview_family_id() -> str:
+        require_local_stage4_preview()
+        return "family-demo"
+
+    app.include_router(
+        create_stage4_onboarding_router(
+            family_experience,
+            authorize=require_local_stage4_preview,
+        )
+    )
+    app.include_router(
+        build_stage4_router(
+            incident_experience,
+            authorize=require_local_stage4_preview,
+        )
+    )
+    app.include_router(
+        create_stage4_family_router(
+            family_reporting,
+            current_family_id=current_preview_family_id,
+            notification_channels_changed=configure_notification_outbox,
+        )
+    )
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -111,11 +236,44 @@ def create_app(
             ],
         )
 
+    @app.get("/api/children/{child_id}/transparency")
+    def child_transparency(child_id: str) -> dict[str, object]:
+        if not store.child_exists(child_id):
+            raise HTTPException(status_code=404, detail="Child not found")
+        implemented = capabilities().model_dump()
+        heartbeat = heartbeat_cache.get("device-demo") if child_id == "child-demo" else None
+        heartbeat_payload = None
+        if heartbeat is not None:
+            permissions_valid = (
+                heartbeat.screen_recording_permission
+                and heartbeat.accessibility_permission
+                and heartbeat.observer_healthy
+            )
+            heartbeat_payload = {
+                "receivedAt": heartbeat.observed_at.isoformat(),
+                "permissionsValid": permissions_valid,
+                "errorCode": None if permissions_valid else "agent_degraded",
+            }
+        return {
+            "capabilities": {key: value for key, value in implemented.items() if isinstance(value, bool)},
+            "plannedCapabilities": ["real_screen_observation", "local_ocr"],
+            "heartbeat": heartbeat_payload,
+            "ageBand": "general",
+            "sharedRecords": [],
+        }
+
     @app.post("/api/devices/pair", response_model=Device, status_code=status.HTTP_201_CREATED)
     def pair_device(payload: DevicePairRequest) -> Device:
         if not store.child_exists(payload.child_id):
             raise HTTPException(status_code=404, detail="Child not found")
-        return store.pair_device(payload)
+        device = store.pair_device(payload)
+        family_reporting_adapter.add_device(
+            "family-demo",
+            payload.child_id,
+            device.id,
+            device.name,
+        )
+        return device
 
     @app.get("/api/devices/{device_id}", response_model=Device)
     def get_device(device_id: str) -> Device:
@@ -126,10 +284,27 @@ def create_app(
 
     @app.post("/api/devices/{device_id}/heartbeat", response_model=Device)
     def record_heartbeat(device_id: str, payload: DeviceHeartbeat) -> Device:
+        received_at = datetime.now(UTC)
+        if payload.observed_at.tzinfo is None or payload.observed_at.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="Heartbeat timestamp must include a timezone")
+        if payload.observed_at > received_at + timedelta(seconds=30):
+            raise HTTPException(status_code=422, detail="Heartbeat timestamp is in the future")
+        fresh = received_at - payload.observed_at <= timedelta(minutes=3)
         try:
-            return store.record_heartbeat(device_id, payload)
+            device = store.record_heartbeat(device_id, payload, fresh=fresh)
         except KeyError:
             raise HTTPException(status_code=404, detail="Device not found") from None
+        heartbeat_cache[device_id] = payload
+        incident_experience.set_device_online(
+            device_id,
+            online=(
+                fresh
+                and payload.screen_recording_permission
+                and payload.accessibility_permission
+                and payload.observer_healthy
+            ),
+        )
+        return device
 
     @app.get("/api/children/{child_id}/policy", response_model=list[PolicyRule])
     def get_policy(child_id: str) -> list[PolicyRule]:
@@ -145,6 +320,18 @@ def create_app(
             raise HTTPException(status_code=404, detail="Child not found")
         if len({rule.category for rule in rules}) != len(rules):
             raise HTTPException(status_code=422, detail="Policy categories must be unique")
+        current_actions = {rule.category: rule.action for rule in store.get_policy(child_id)}
+        expands_blocking = any(
+            rule.action == "BLOCK"
+            and current_actions.get(rule.category) != "BLOCK"
+            and rule.category not in approved_block_categories
+            for rule in rules
+        )
+        if expands_blocking:
+            raise HTTPException(
+                status_code=409,
+                detail="Blocking requires an approved category release gate",
+            )
         return store.replace_policy(child_id, rules)
 
     @app.post("/api/incidents", response_model=Incident, status_code=status.HTTP_201_CREATED)
@@ -162,6 +349,8 @@ def create_app(
         response.headers["X-Guardian-Deduplicated"] = "false" if created else "true"
         if not created:
             response.status_code = status.HTTP_200_OK
+        else:
+            register_incident_experience(incident, payload)
         return incident
 
     @app.get("/api/incidents", response_model=list[Incident])
@@ -252,6 +441,43 @@ def create_app(
             store.record_telemetry(device_id, payload)
         except KeyError:
             raise HTTPException(status_code=404, detail="Device not found") from None
+        if payload.app_name and payload.session_seconds:
+            identity = "|".join(
+                (
+                    device_id,
+                    payload.child_id,
+                    payload.observed_at.isoformat(),
+                    payload.app_name,
+                    str(payload.session_seconds),
+                    str(payload.suspicious_events),
+                )
+            )
+            source_event_id = f"r1-{hashlib.sha256(identity.encode()).hexdigest()[:32]}"
+            events = (
+                (
+                    SessionSafetyEvent(
+                        event_id=f"{source_event_id}:risk",
+                        occurred_at=payload.observed_at,
+                        metric=SafetyMetric.RISK_EVENTS,
+                        count=payload.suspicious_events,
+                    ),
+                )
+                if payload.suspicious_events
+                else ()
+            )
+            family_reporting.ingest_session(
+                "family-demo",
+                SessionUpload(
+                    child_id=payload.child_id,
+                    device_id=device_id,
+                    source_event_id=source_event_id,
+                    source="OBSERVER_SESSION",
+                    started_at=payload.observed_at - timedelta(seconds=payload.session_seconds),
+                    ended_at=payload.observed_at,
+                    safety_events=events,
+                ),
+                synced_at=payload.observed_at,
+            )
         return Response(status_code=status.HTTP_204_NO_CONTENT)
 
     @app.get("/api/daily-report", response_model=DailyReport)
@@ -275,6 +501,9 @@ def create_app(
 
     app.add_api_route("/", ui, methods=["GET"], include_in_schema=False)
     app.add_api_route("/child", ui, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/onboarding", ui, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/family", ui, methods=["GET"], include_in_schema=False)
+    app.add_api_route("/support", ui, methods=["GET"], include_in_schema=False)
     app.add_api_route("/settings", ui, methods=["GET"], include_in_schema=False)
     app.add_api_route("/incidents/{incident_id}", ui, methods=["GET"], include_in_schema=False)
     app.add_api_route("/demo-chat", demo_chat, methods=["GET"], include_in_schema=False)

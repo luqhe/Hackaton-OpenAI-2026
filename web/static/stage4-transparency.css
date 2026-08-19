@@ -1,0 +1,146 @@
+.stage4-transparency {
+  --stage4-ink: #17211e;
+  --stage4-muted: #4d5c56;
+  --stage4-line: #b9c8c1;
+  --stage4-surface: #ffffff;
+  --stage4-positive: #0b664b;
+  --stage4-caution: #6b4c00;
+  max-width: 74rem;
+  color: var(--stage4-ink);
+  background: var(--stage4-surface);
+  overflow-wrap: anywhere;
+}
+
+.stage4-transparency__header,
+.stage4-transparency__grid > section,
+.stage4-boundaries {
+  padding: clamp(1rem, 3vw, 1.75rem);
+  border: 1px solid var(--stage4-line);
+  border-radius: 0.75rem;
+}
+
+.stage4-transparency__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 1rem;
+  margin-block: 1rem;
+}
+
+.stage4-status {
+  display: grid;
+  gap: 0.25rem;
+  margin-top: 1rem;
+  padding: 0.875rem 1rem;
+  border: 2px solid var(--stage4-line);
+  border-radius: 0.5rem;
+}
+
+.stage4-status--active {
+  color: var(--stage4-positive);
+  border-color: currentcolor;
+}
+
+.stage4-status--demo,
+.stage4-status--inactive,
+.stage4-status--stale,
+.stage4-status--permission_required {
+  color: var(--stage4-caution);
+  border-color: currentcolor;
+}
+
+.stage4-status--error {
+  color: #7d2520;
+  border-color: currentcolor;
+}
+
+.stage4-capabilities,
+.stage4-sharing,
+.stage4-boundaries ul {
+  margin: 1rem 0 0;
+  padding-inline-start: 1.25rem;
+}
+
+.stage4-capability {
+  margin-block: 0.5rem;
+}
+
+.stage4-capability > span,
+.stage4-capability > strong {
+  display: block;
+}
+
+.stage4-capability > strong,
+.stage4-sharing-count,
+.stage4-share time {
+  color: var(--stage4-muted);
+}
+
+.stage4-capability--planned > strong::before {
+  content: "○ ";
+}
+
+.stage4-capability--implemented > strong::before {
+  content: "✓ ";
+}
+
+.stage4-capability--unavailable > strong::before {
+  content: "— ";
+}
+
+.stage4-share + .stage4-share {
+  margin-top: 1rem;
+}
+
+.stage4-transparency summary {
+  display: flex;
+  align-items: center;
+  min-width: 44px;
+  min-height: 44px;
+  color: #164f40;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.stage4-transparency :focus-visible {
+  outline: 3px solid #075fda;
+  outline-offset: 3px;
+}
+
+.stage4-transparency h2,
+.stage4-transparency h3,
+.stage4-transparency h4 {
+  line-height: 1.25;
+}
+
+@media (max-width: 48rem) {
+  .stage4-transparency__grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .stage4-transparency *,
+  .stage4-transparency *::before,
+  .stage4-transparency *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+  }
+}
+
+@media (prefers-contrast: more) {
+  .stage4-transparency__header,
+  .stage4-transparency__grid > section,
+  .stage4-boundaries,
+  .stage4-status {
+    border-width: 3px;
+  }
+}
+
+@media (forced-colors: active) {
+  .stage4-transparency,
+  .stage4-status {
+    forced-color-adjust: auto;
+  }
+}

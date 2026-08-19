@@ -5,8 +5,8 @@
   "type": "module",
   "packageManager": "pnpm@11.19.0",
   "scripts": {
-    "lint:js": "eslint web/static/app.js",
-    "check:js": "node --check web/static/app.js",
+    "lint:js": "eslint web/static/*.js",
+    "check:js": "node --check web/static/app.js && node --check web/static/demo-chat.js && node --check web/static/stage4-i18n.js && node --check web/static/stage4-transparency.js",
     "format:check": "prettier --check \"web/**/*.{html,css,js}\" eslint.config.js package.json",
     "format:write": "prettier --write \"web/**/*.{html,css,js}\" eslint.config.js package.json"
   },
