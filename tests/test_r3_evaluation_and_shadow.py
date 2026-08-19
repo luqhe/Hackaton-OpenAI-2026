@@ -36,6 +36,20 @@ def test_dataset_is_synthetic_versioned_and_split_without_identifier_leakage() -
     assert len(split_by_id) == len(examples)
 
 
+def test_dataset_digest_is_stable_across_platform_line_endings(tmp_path: Path) -> None:
+    raw = DATASET_PATH.read_bytes().replace(b"\r\n", b"\n")
+    lf_path = tmp_path / "lf.jsonl"
+    crlf_path = tmp_path / "crlf.jsonl"
+    lf_path.write_bytes(raw)
+    crlf_path.write_bytes(raw.replace(b"\n", b"\r\n"))
+
+    lf_examples, lf_digest = load_dataset(lf_path)
+    crlf_examples, crlf_digest = load_dataset(crlf_path)
+
+    assert [example.id for example in crlf_examples] == [example.id for example in lf_examples]
+    assert crlf_digest == lf_digest
+
+
 def test_frozen_regression_reports_required_slices_and_passes_gate() -> None:
     report = evaluate_dataset(
         DATASET_PATH,
