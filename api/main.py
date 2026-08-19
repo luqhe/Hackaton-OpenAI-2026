@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+import secrets
 import sqlite3
 from collections.abc import Callable
 from contextlib import asynccontextmanager
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 
 from fastapi import Body, Depends, FastAPI, HTTPException, Query, Request, Response, status
@@ -27,15 +29,27 @@ from api.auth import (
     require_mutation_scope,
     revoke_current_session,
 )
+from api.device_identity import DeviceIdentityStore, PairingError
 from api.storage import GuardianStore
 from guardian_core.config import GuardianSettings
+from guardian_core.device_api import (
+    AgentIncidentCreate,
+    AgentTelemetryUpdate,
+    CommandAcknowledgement,
+    CredentialRotationRequest,
+    DeviceCredentialIssued,
+    PairingChallengeCreate,
+    PairingChallengeIssued,
+    PairingConfirmation,
+)
+from guardian_core.device_protocol import DeviceAuthError, DevicePrincipal, DeviceRequestAuthenticator
+from guardian_core.identity import FamilyScope
 from guardian_core.models import (
     DailyReport,
     Device,
     DeviceCommand,
     DeviceHeartbeat,
     DevicePairRequest,
-    FamilyScope,
     Incident,
     IncidentCreate,
     IncidentStatus,
@@ -57,6 +71,9 @@ def create_app(
     evidence_directory: Path | None = None,
     settings: GuardianSettings | None = None,
     password_reset_notifier: Callable[[str, str], None] | None = None,
+    family_scope_resolver: Callable[[Request], FamilyScope] | None = None,
+    device_clock: Callable[[], datetime] = lambda: datetime.now(UTC),
+    pairing_pepper: bytes | None = None,
 ) -> FastAPI:
     runtime_settings = settings or GuardianSettings.from_env()
     db_path = database_path or runtime_settings.database_path
@@ -67,10 +84,17 @@ def create_app(
         environment=runtime_settings.environment,
         demo_mode=runtime_settings.demo_mode,
     )
+    if pairing_pepper is None:
+        if runtime_settings.environment in {"staging", "production"}:
+            raise RuntimeError("pairing pepper is required outside development/test")
+        pairing_pepper = secrets.token_bytes(32)
+    device_store = DeviceIdentityStore(store, pairing_pepper=pairing_pepper, clock=device_clock)
+    device_authenticator = DeviceRequestAuthenticator(device_store, device_store, clock=device_clock)
 
     @asynccontextmanager
     async def lifespan(_: FastAPI):
         store.initialize()
+        device_store.initialize()
         yield
 
     app = FastAPI(
@@ -81,6 +105,164 @@ def create_app(
     )
     app.state.store = store
     app.state.settings = runtime_settings
+    app.state.device_store = device_store
+
+    def require_demo_agent_route() -> None:
+        if not runtime_settings.demo_mode:
+            raise HTTPException(status_code=404, detail="Not found")
+
+    def parent_scope(request: Request) -> FamilyScope:
+        if family_scope_resolver is not None:
+            return family_scope_resolver(request)
+        return require_mutation_scope(request)
+
+    def _request_target(request: Request) -> str:
+        raw_path = request.scope.get("raw_path", request.url.path.encode("ascii")).decode("ascii")
+        query = request.scope.get("query_string", b"").decode("ascii")
+        return f"{raw_path}?{query}" if query else raw_path
+
+    async def device_principal(request: Request) -> DevicePrincipal:
+        try:
+            return device_authenticator.authenticate(
+                method=request.method,
+                target=_request_target(request),
+                body=await request.body(),
+                headers=request.headers,
+            )
+        except DeviceAuthError as error:
+            response_status = 426 if error.code == "unsupported_protocol" else 401
+            if error.code == "replay_detected":
+                response_status = 409
+            raise HTTPException(
+                status_code=response_status,
+                detail=error.code,
+                headers={"Cache-Control": "no-store", "WWW-Authenticate": "GuardianDevice"},
+            ) from None
+
+    @app.post(
+        "/api/pairing/challenges",
+        response_model=PairingChallengeIssued,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def create_pairing_challenge(
+        payload: PairingChallengeCreate, scope: FamilyScope = Depends(parent_scope)
+    ) -> dict[str, object]:
+        try:
+            return device_store.create_pairing_challenge(scope, payload.child_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Child not found") from None
+
+    @app.post(
+        "/api/device/pair",
+        response_model=DeviceCredentialIssued,
+        status_code=status.HTTP_201_CREATED,
+    )
+    def confirm_pairing(payload: PairingConfirmation) -> DeviceCredentialIssued:
+        try:
+            return device_store.complete_pairing(payload)
+        except PairingError:
+            raise HTTPException(status_code=410, detail="invalid_or_expired_pairing") from None
+
+    @app.post("/api/devices/{device_id}/credentials/revoke", status_code=status.HTTP_204_NO_CONTENT)
+    def revoke_device_credential(device_id: str, scope: FamilyScope = Depends(parent_scope)) -> Response:
+        try:
+            device_store.revoke_device(scope, device_id)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Device not found") from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/agent/credentials/rotate", response_model=DeviceCredentialIssued)
+    def rotate_device_credential(
+        payload: CredentialRotationRequest,
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> DeviceCredentialIssued:
+        try:
+            return device_store.rotate_credential(principal, payload.public_key, payload.idempotency_key)
+        except PairingError as error:
+            if error.code == "idempotency_conflict":
+                raise HTTPException(status_code=409, detail=error.code) from None
+            raise HTTPException(status_code=422, detail=error.code) from None
+
+    @app.get("/api/agent/policy", response_model=list[PolicyRule])
+    def authenticated_policy(
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> list[PolicyRule]:
+        return store.get_policy(principal.family_id, principal.child_id)
+
+    @app.post("/api/agent/incidents", response_model=Incident, status_code=status.HTTP_201_CREATED)
+    def authenticated_incident(
+        payload: AgentIncidentCreate,
+        response: Response,
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> Incident:
+        request = IncidentCreate(
+            child_id=principal.child_id,
+            device_id=principal.device_id,
+            **payload.model_dump(),
+        )
+        incident, created = store.create_incident(principal.family_id, request)
+        response.headers["X-Guardian-Deduplicated"] = "false" if created else "true"
+        if not created:
+            response.status_code = status.HTTP_200_OK
+        return incident
+
+    @app.post("/api/agent/telemetry", status_code=status.HTTP_204_NO_CONTENT)
+    def authenticated_telemetry(
+        payload: AgentTelemetryUpdate,
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> Response:
+        store.record_telemetry(
+            principal.family_id,
+            principal.device_id,
+            TelemetryUpdate(child_id=principal.child_id, **payload.model_dump()),
+        )
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post(
+        "/api/agent/incidents/{incident_id}/evidence",
+        status_code=status.HTTP_201_CREATED,
+    )
+    async def authenticated_evidence(
+        incident_id: str,
+        request: Request,
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> dict[str, str]:
+        if not device_store.incident_belongs_to_device(principal, incident_id):
+            raise HTTPException(status_code=404, detail="Incident not found")
+        content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
+        if content_type not in ALLOWED_EVIDENCE_TYPES:
+            raise HTTPException(status_code=415, detail="Unsupported evidence type")
+        data = await request.body()
+        if not data:
+            raise HTTPException(status_code=422, detail="Evidence body cannot be empty")
+        if len(data) > MAX_EVIDENCE_BYTES:
+            raise HTTPException(status_code=413, detail="Evidence exceeds the 4 MB limit")
+        evidence_id = store.save_evidence(principal.family_id, incident_id, data, content_type)
+        return {"id": evidence_id, "url": f"/api/evidence/{evidence_id}"}
+
+    @app.get("/api/agent/commands", response_model=list[DeviceCommand])
+    async def authenticated_commands(
+        after_id: int = Query(default=0, ge=0),
+        wait_seconds: float = Query(default=20, ge=0, le=25),
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> list[DeviceCommand]:
+        deadline = asyncio.get_running_loop().time() + wait_seconds
+        while True:
+            commands = device_store.pending_commands(principal, after_id)
+            if commands or asyncio.get_running_loop().time() >= deadline:
+                return commands
+            await asyncio.sleep(min(0.25, max(0, deadline - asyncio.get_running_loop().time())))
+
+    @app.post("/api/agent/commands/{command_id}/ack", response_model=DeviceCommand)
+    def authenticated_command_ack(
+        command_id: int,
+        payload: CommandAcknowledgement,
+        principal: DevicePrincipal = Depends(device_principal),
+    ) -> DeviceCommand:
+        try:
+            return device_store.acknowledge_command(principal, command_id, payload)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Command not found") from None
 
     @app.middleware("http")
     async def security_headers(request: Request, call_next):
@@ -223,6 +405,7 @@ def create_app(
         payload: DevicePairRequest,
         scope: FamilyScope = Depends(require_mutation_scope),
     ) -> Device:
+        require_demo_agent_route()
         if not store.child_exists(scope.family_id, payload.child_id):
             raise HTTPException(status_code=404, detail="Resource not found")
         return store.pair_device(scope.family_id, payload)
@@ -265,6 +448,7 @@ def create_app(
         response: Response,
         scope: FamilyScope = Depends(require_mutation_scope),
     ) -> Incident:
+        require_demo_agent_route()
         if not store.child_exists(scope.family_id, payload.child_id):
             raise HTTPException(status_code=404, detail="Resource not found")
         if not store.device_exists(scope.family_id, payload.device_id):
@@ -344,6 +528,7 @@ def create_app(
         request: Request,
         scope: FamilyScope = Depends(require_mutation_scope),
     ) -> dict[str, str]:
+        require_demo_agent_route()
         content_type = request.headers.get("content-type", "").split(";", 1)[0].lower()
         if content_type not in ALLOWED_EVIDENCE_TYPES:
             raise HTTPException(status_code=415, detail="Unsupported evidence type")
@@ -372,6 +557,7 @@ def create_app(
         after_id: int = Query(default=0, ge=0),
         scope: FamilyScope = Depends(require_family_scope),
     ) -> list[DeviceCommand]:
+        require_demo_agent_route()
         try:
             return store.pending_commands(scope.family_id, device_id, after_id)
         except KeyError:
@@ -383,6 +569,7 @@ def create_app(
         command_id: int,
         scope: FamilyScope = Depends(require_mutation_scope),
     ) -> DeviceCommand:
+        require_demo_agent_route()
         try:
             return store.acknowledge_command(scope.family_id, device_id, command_id)
         except KeyError:
@@ -394,6 +581,7 @@ def create_app(
         payload: TelemetryUpdate,
         scope: FamilyScope = Depends(require_mutation_scope),
     ) -> Response:
+        require_demo_agent_route()
         try:
             store.record_telemetry(scope.family_id, device_id, payload)
         except KeyError:

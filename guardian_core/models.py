@@ -84,7 +84,10 @@ class CommandType(StrEnum):
 
 class CommandStatus(StrEnum):
     PENDING = "PENDING"
+    DELIVERED = "DELIVERED"
     ACKNOWLEDGED = "ACKNOWLEDGED"
+    EXPIRED = "EXPIRED"
+    FAILED = "FAILED"
 
 
 class ConversationMessage(BaseModel):
@@ -225,6 +228,13 @@ class DeviceCommand(BaseModel):
     application: str
     status: CommandStatus
     created_at: datetime
+    protocol_version: str = "1.0"
+    idempotency_key: str | None = None
+    expires_at: datetime | None = None
+    attempt_count: int = 0
+    delivered_at: datetime | None = None
+    next_attempt_at: datetime | None = None
+    terminal_error: str | None = None
     acknowledged_at: datetime | None = None
 
 
