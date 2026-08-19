@@ -164,7 +164,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 - [x] `R1-25` Adicionar logs locais estruturados, sem conteúdo sensível bruto.
 - [x] `R1-26` Criar testes E2E em macOS para captura, risco, bloqueio e desbloqueio.
 - [x] `R1-27` Testar suspensão, perda de rede, backend indisponível e permissão revogada.
-- [ ] `R1-28` Medir consumo de CPU, memória, bateria, disco e rede.
+- [x] `R1-28` Medir consumo de CPU, memória, bateria, disco e rede.
 
 ## Critérios de saída
 

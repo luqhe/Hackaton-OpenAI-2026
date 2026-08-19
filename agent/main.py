@@ -10,6 +10,7 @@ from pathlib import Path
 
 from agent.client import GuardianAPIClient, GuardianAPIError
 from agent.context import ObservationContextBuffer
+from agent.diagnostics import PerformanceMonitor
 from agent.enforcer import DemoEnforcer, MacOSEnforcer
 from agent.evidence import EphemeralCapture, build_minimal_png
 from agent.observer import MacOSObserver, ObserverPermissionError
@@ -406,6 +407,20 @@ def run_observer(args: argparse.Namespace) -> int:
     return 0
 
 
+def run_diagnostics(args: argparse.Namespace) -> int:
+    if args.samples <= 0:
+        raise ValueError("samples must be positive")
+    if args.interval < 0:
+        raise ValueError("interval cannot be negative")
+    monitor = PerformanceMonitor(args.data_directory)
+    for index in range(args.samples):
+        snapshot = monitor.sample()
+        print(json.dumps(snapshot.as_json_dict(), sort_keys=True, separators=(",", ":")))
+        if index + 1 < args.samples:
+            time.sleep(args.interval)
+    return 0
+
+
 def poll_commands(
     client: GuardianAPIClient,
     device_id: str,
@@ -512,6 +527,19 @@ def build_parser() -> argparse.ArgumentParser:
     )
     observe.add_argument("--real-enforcement", action="store_true")
     observe.set_defaults(handler=run_observer)
+
+    diagnostics = subparsers.add_parser(
+        "diagnostics",
+        help="Measure CPU, memory, battery, disk and network counters",
+    )
+    diagnostics.add_argument(
+        "--data-directory",
+        type=Path,
+        default=PROJECT_ROOT / ".data",
+    )
+    diagnostics.add_argument("--samples", type=int, default=6)
+    diagnostics.add_argument("--interval", type=float, default=10)
+    diagnostics.set_defaults(handler=run_diagnostics)
 
     poll = subparsers.add_parser("poll", help="Poll and execute pending device commands")
     poll.add_argument("--api-url", default=os.getenv("GUARDIAN_API_URL", "http://127.0.0.1:8000"))
