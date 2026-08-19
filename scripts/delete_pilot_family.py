@@ -9,7 +9,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from api.storage import GuardianStore  # noqa: E402
-from guardian_core.models import FamilyDeletionReceipt  # noqa: E402
+from guardian_core.models import FamilyDeletionReceipt, FamilyDeletionStatus  # noqa: E402
 
 
 def delete_with_confirmation(
@@ -46,7 +46,7 @@ def main() -> int:
         print(f"ERROR: {error}", file=sys.stderr)
         return 2
     print(receipt.model_dump_json(indent=2))
-    return 0
+    return 0 if receipt.status == FamilyDeletionStatus.COMPLETED else 3
 
 
 if __name__ == "__main__":
