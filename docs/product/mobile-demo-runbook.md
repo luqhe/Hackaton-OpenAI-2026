@@ -2,7 +2,7 @@
 
 This runbook adapts the current Guardian demo flow to the maintained Android branch, `agent/android-mobile-port`.
 
-The Android application is the **parent/family review interface**. Risk classification, calibration, policy evaluation, incident creation, evidence persistence, and device-command handling remain host/backend responsibilities.
+The Android application is the **parent/family review interface**. Risk classification, calibration, policy evaluation, incident creation, evidence persistence, and host command execution remain backend/host responsibilities.
 
 ## Demo modes
 
@@ -12,16 +12,14 @@ This is the portable, reproducible mobile demo.
 
 - no OpenAI key;
 - no external service;
-- no Android elevated permission;
+- no elevated Android permission;
 - no Android screen capture;
 - no real Android enforcement.
-
-Flow:
 
 ```text
 controlled fixture
     ↓
-Python risk + policy pipeline
+shared Python risk + calibration + policy pipeline
     ↓
 Guardian API incident
     ↓
@@ -32,17 +30,17 @@ unlock / keep blocked
 host demo-agent command acknowledgement
 ```
 
-### Optional: one-shot macOS visual demo + Android review
+### Optional: macOS observation + Android review
 
-The synchronized upstream backend also supports an optional host-side visual path.
+The synchronized host runtime also supports controlled one-shot and continuous macOS observation paths.
 
-- screenshot capture occurs on macOS;
-- OpenAI classification occurs from the Python host/provider layer;
+- capture/observation occurs on macOS;
+- optional OpenAI provider calls occur from Python on the host;
 - `OPENAI_API_KEY` stays on the host;
 - Android reviews the resulting incident through the same API;
-- Android still does not capture the screen or enforce app blocks.
+- Android does not inherit macOS capture, OCR, Accessibility, or enforcement capabilities.
 
-The upstream browser-oriented runbook remains available at `docs/product/demo-runbook.md`.
+See `docs/product/macos-permissions.md` before enabling host observation.
 
 ---
 
@@ -175,11 +173,11 @@ Expected host behavior:
 
 1. `fixtures/dangerous_contact/session.json` is loaded.
 2. The recent context is classified.
-3. Family policy is evaluated separately from classification.
+3. Calibration/risk controls and family policy remain separate from classification.
 4. Runtime release gates are applied.
 5. The block is simulated.
 6. The incident and minimal evidence are persisted.
-7. The agent waits for a parent command.
+7. The host agent waits for a parent command.
 
 Useful terminal lines include:
 
@@ -194,7 +192,7 @@ child_view=...
 ## Android — review and decide
 
 1. Open **Início**.
-2. Tap **Atualizar** if the new incident is not already listed.
+2. Tap **Atualizar** if the incident is not already listed.
 3. Open the incident.
 4. Review category, confidence, explanation, evidence summary, and status.
 5. Choose **Desbloquear aplicativo** or **Manter bloqueado**.
@@ -211,15 +209,15 @@ That line completes the end-to-end command cycle.
 
 ---
 
-# Optional visual demo with Android as parent UI
+# Optional host visual demo with Android as parent UI
 
-This mode is optional and currently requires a macOS host.
+This mode currently requires a macOS host.
 
 ## Requirements
 
 - Guardian API running locally;
 - controlled synthetic demo content;
-- macOS screen-capture permission for the observer;
+- required macOS capture permissions;
 - an OpenAI API key if the optional OpenAI path is used.
 
 Set the key on the host only:
@@ -228,29 +226,35 @@ Set the key on the host only:
 export OPENAI_API_KEY="..."
 ```
 
-Do not put the key in Android settings, Gradle configuration, source code, or the APK.
+Do not put it in Android settings, Gradle configuration, source code, or APK resources.
 
-## Start the controlled chat
-
-Open:
+Open the controlled chat:
 
 ```text
 http://127.0.0.1:8000/demo-chat
 ```
 
-Reveal the controlled dangerous-contact progression until the frame is ready for capture.
-
-## Trigger the launcher
+Then trigger:
 
 ```bash
 bash scripts/run-live-demo.sh
 ```
 
-The launcher prints its mode/source explicitly. Depending on local capability it may use the optional live path or fall back to the deterministic fixture path.
+The launcher reports its source/mode explicitly and may fall back to the deterministic fixture path. If a visual incident is created, refresh Android and review it through the same incident contract.
 
-If the visual path succeeds, the host agent uploads selected screenshot evidence to the same incident API. The Android incident contract is unchanged; the mobile UI can still review the incident and reports that visual evidence is available on the server.
+The current Android UI reports when visual evidence is available on the server; it does not introduce Android capture or an image-loading dependency.
 
-Complete the parent decision in Android exactly as in the deterministic flow.
+## Optional continuous host observation
+
+The latest synchronized host runtime also provides:
+
+```bash
+.venv/bin/python -m agent.main observe
+```
+
+That path uses the host/macOS observation stack, including adaptive scheduling, temporal context buffering, ephemeral evidence, durable state, offline outbox, heartbeat, diagnostics, and recovery behavior.
+
+This does **not** turn the Android app into an observer.
 
 ---
 
@@ -289,19 +293,34 @@ Use HTTPS outside trusted local development.
 
 ---
 
-# Device pairing
+# Android device pairing and heartbeat
 
-The Android app may register itself through:
+The Android app can register itself through:
 
 ```http
 POST /api/devices/pair
 ```
 
-The returned device ID is persisted locally by the app.
+The returned device ID is persisted locally.
 
-For the canned host-agent demo, however, switch back to **Usar dispositivo demo** so the app and `scripts/run-demo.sh` both target `device-demo`.
+For an actually paired Android record, the client also calls:
 
-Pairing currently means registration only. It does not activate Android observation, screen capture, or enforcement.
+```http
+POST /api/devices/:id/heartbeat
+```
+
+The heartbeat updates liveness while deliberately reporting the current mobile boundary:
+
+```text
+screen_recording_permission = false
+accessibility_permission    = false
+observer_healthy            = false
+offline_queue_depth         = 0
+```
+
+Pairing + heartbeat do **not** activate Android observation, screen capture, OCR, Accessibility, or enforcement.
+
+For the canned host-agent demo, use **Conexão → Usar dispositivo demo** so Android and `scripts/run-demo.sh` both target `device-demo`. Android does not heartbeat that legacy demo record.
 
 ---
 
@@ -309,19 +328,19 @@ Pairing currently means registration only. It does not activate Android observat
 
 ## Android cannot reach the API
 
-- Emulator: verify the app uses `http://10.0.2.2:8000`.
+- Emulator: verify `http://10.0.2.2:8000`.
 - Physical device: verify the LAN IP, `0.0.0.0` binding, firewall, and network isolation.
 - Confirm `http://127.0.0.1:8000/api/health` works on the host.
 
 ## Old or duplicate incident
 
-Stop the API, reset state, restart the API, and repeat:
+Stop the API, reset state, restart it, and repeat:
 
 ```bash
 bash scripts/reset-demo.sh
 ```
 
-## Optional visual demo fails
+## Optional host observation fails
 
 Keep the error visible and use the deterministic fixture path. The fixture path is an explicit supported demo source, not a hidden degraded mode.
 
@@ -333,13 +352,15 @@ Use **Conexão → Usar dispositivo demo** before running the canned fixture.
 
 # Presentation boundaries
 
-During the mobile demo, state these boundaries accurately:
+State these accurately during the mobile demo:
 
 - Android is native Compose, not a WebView wrapper.
 - Android does not contain the risk engine or provider credentials.
-- Classification and calibration occur in the shared Python pipeline.
+- Classification, calibration, and policy occur in the shared Python pipeline.
 - The standard Android demo is deterministic and local.
-- The optional OpenAI visual path is host-side and macOS-specific.
-- Android currently has no continuous observation or real enforcement capability.
+- OpenAI and richer observation paths are host-side.
+- The synchronized native Swift helper and macOS packaging are host capabilities, not Android capabilities.
+- Paired Android devices provide registration/liveness only in this slice.
+- Android has no continuous observation or real enforcement capability.
 - Android requests only internet access.
-- A real Android enforcement model requires a separate architecture decision and release gate.
+- Real Android enforcement requires a separate architecture decision and release gate.
