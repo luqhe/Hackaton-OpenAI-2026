@@ -1,123 +1,119 @@
 # Guardian — Android Mobile Port
 
-Guardian is a contextual digital-safety and digital-literacy MVP for children and teenagers. It evaluates recent context, separates risk classification from deterministic family policy, stores minimal incident evidence, and keeps the final unlock decision with a parent or guardian.
+Guardian is a contextual digital-safety and digital-literacy MVP for children and teenagers. It separates contextual risk assessment from deterministic family policy, stores minimal incident evidence, and keeps the final unlock decision with a parent or guardian.
 
-> **Branch status**
+> **This is the maintained mobile branch.**
 >
-> - `main` remains the primary desktop/web development branch.
-> - `agent/android-mobile-port` is the maintained Android port.
-> - This branch periodically merges `main` and adapts upstream product/backend changes to the mobile client without moving safety logic into Kotlin.
+> - `main` is the primary desktop/web + macOS-agent branch.
+> - `agent/android-mobile-port` periodically merges `main` and adapts it to a native Android family interface.
+> - Shared backend, risk, evaluation, and host-agent changes follow `main`.
+> - Android-specific UI/build/permission decisions remain isolated on this branch.
 
-The Android app is a native **Kotlin + Jetpack Compose** client. The Python backend remains the source of truth for risk assessment, calibration, policy, incidents, evidence, telemetry, device commands, evaluation, and shadow-mode controls.
+The Android application is native **Kotlin + Jetpack Compose**. It is not a WebView, does not contain a second risk engine, and never receives provider credentials such as `OPENAI_API_KEY`.
 
-The Android app does **not** use a WebView and does **not** call OpenAI directly.
-
----
-
-## Current architecture
+## Mobile architecture
 
 ```mermaid
 flowchart LR
-    INPUT["Fixture or selected demo frame"] --> CONTEXT["Context normalization"]
-    CONTEXT --> RISK["Risk provider / classifier"]
-    RISK --> CAL["Calibration + safety controls"]
+    INPUT["Fixture / host observation"] --> CTX["Context normalization"]
+    CTX --> RISK["Risk provider"]
+    RISK --> CAL["Calibration + risk controls"]
     CAL --> POLICY["Deterministic family policy"]
-    POLICY --> API["Guardian FastAPI"]
-    POLICY --> AGENT["Demo / macOS enforcer"]
+    POLICY --> API["FastAPI control plane"]
+    POLICY --> HOST["Host agent / enforcer"]
 
-    API --> ANDROID["Android Compose client"]
+    API --> ANDROID["Android Compose app"]
     ANDROID --> DECISION["Parent decision"]
     DECISION --> API
 
     API --> DB[("SQLite + minimal evidence")]
-    API --> COMMAND["Persistent device command"]
-    COMMAND --> AGENT
+    API --> CMD["Persistent command"]
+    CMD --> HOST
 ```
 
-The important boundary is:
+The safety boundary is deliberate:
 
 ```text
-Android UI / device registration
-            ↓
-        Guardian API
-            ↓
-shared Python context + risk + calibration + policy pipeline
+Android UI / Android device registration
+                  ↓
+              Guardian API
+                  ↓
+ shared Python context + risk + calibration + policy pipeline
 ```
 
-This prevents the mobile port from becoming a second safety implementation with different classification or enforcement behavior.
+Kotlin renders state and invokes explicit family actions. Classification, calibration, provider selection, release gates, and enforcement policy remain shared/backend concerns.
 
 ---
 
-## What changed after the latest `main` sync
+# What is included on this branch
 
-The mobile branch now includes the current upstream risk and demo work from `main`:
-
-- normalized contextual risk contracts and provider descriptors;
-- category-specific confidence calibration;
-- configurable risk controls, thresholds, kill switches, and block approvals;
-- a versioned OpenAI multimodal provider for the optional one-shot demo;
-- a contextual risk pipeline with provider fallback/error handling;
-- frozen evaluation data and regression gates;
-- shadow-mode window aggregation and generated reports;
-- R3 evaluation checks in CI and local quality scripts;
-- the controlled `/demo-chat` experience;
-- `scripts/run-live-demo.sh` and the optional macOS screenshot path;
-- additional live-demo, OpenAI, pipeline, calibration, evaluation, and shadow tests;
-- the upstream local demo runbook under `docs/product/demo-runbook.md`.
-
-### Mobile adaptation of those changes
-
-- The Android app remains a **review/control-plane client**. Risk providers, calibration, OpenAI requests, policy evaluation, and release gates stay in Python.
-- The deterministic fixture flow remains the recommended cross-platform Android demo.
-- Incidents created by the optional one-shot visual demo are compatible with the Android incident screen because the client already consumes the same incident contract and carries `screenshot_urls`.
-- Android does not perform the macOS screen capture used by `live-demo`.
-- Android does not gain Accessibility, MediaProjection, notification-listener, device-admin, microphone, or camera permissions as part of this sync.
-- Real Android observation/enforcement remains a separate future architecture/release-gate decision.
-
-For the mobile-specific presentation path, see [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md).
-
----
-
-## Repository layout
-
-```text
-guardian/
-├── android-app/      native Kotlin + Jetpack Compose client
-├── agent/            host-side agent, observer, API client and enforcer
-├── api/              FastAPI control plane and SQLite persistence
-├── guardian_core/    shared models, policy engine and runtime gates
-├── risk_engine/      classifier, context, providers, calibration, eval + shadow pipeline
-├── config/           environment examples and risk controls
-├── evals/            frozen datasets, gates and generated R3 results
-├── fixtures/         deterministic reproducible demo scenarios
-├── docs/             ADRs, runbooks, privacy, security and release gates
-├── web/              browser dashboard + controlled demo chat
-├── tests/            backend, risk, live-demo and safety regression tests
-├── scripts/          bootstrap, checks, demos, evaluation and reset commands
-├── build.gradle.kts  Android plugin/toolchain versions
-└── settings.gradle.kts
-```
-
-The Android architectural decision is documented in [`docs/adr/0005-android-mobile-client.md`](docs/adr/0005-android-mobile-client.md).
-
----
-
-# Android application
-
-## Implemented mobile flows
+## Native Android client
 
 - Parent dashboard with daily usage and incident metrics.
-- Incident list and incident review.
-- Parent **unlock** and **keep blocked** actions.
-- Child transparency view with daily aggregated app use.
-- Family policy editor for `ALLOW`, `ALERT`, and `BLOCK` actions.
-- Guardian API connection configuration.
+- Incident list and incident-detail review.
+- Parent **unlock** / **keep blocked** decisions.
+- Child transparency view.
+- Family policy editor for `ALLOW`, `ALERT`, and `BLOCK`.
+- API connection configuration.
 - Android device pairing through `POST /api/devices/pair`.
+- Android heartbeat through `POST /api/devices/:id/heartbeat` for actually paired Android devices.
 - Capability-aware UI backed by `/api/capabilities`.
-- Support for incident records that include visual-evidence URLs.
-- Independent Android CI build.
+- Compatibility with text evidence and incidents carrying visual-evidence URLs.
+- Independent Android CI debug build.
 
-## Deliberately not implemented on Android
+### Android heartbeat adaptation
+
+The latest shared API introduced agent/device heartbeats. Paired Android devices now use that endpoint to keep `last_seen_at` meaningful.
+
+The Android heartbeat reports the current mobile boundary truthfully:
+
+```text
+screen_recording_permission = false
+accessibility_permission    = false
+observer_healthy            = false
+offline_queue_depth         = 0
+```
+
+The app does **not** send an Android heartbeat for the legacy `device-demo` record because that record represents the host-side demo device.
+
+## Current shared R3 risk stack from `main`
+
+The branch now contains the current upstream contextual-risk work, including:
+
+- normalized context contracts and provider descriptors;
+- local and optional OpenAI providers;
+- category-specific confidence calibration;
+- configurable thresholds, kill switches, and block approvals;
+- provider timeout/retry/fallback controls;
+- frozen synthetic evaluation datasets and regression gates;
+- shadow-mode windows, summaries, and static dashboard;
+- annotation/contextual-pipeline documentation;
+- R3 checks integrated into CI and local quality scripts.
+
+The optional OpenAI provider remains Python/host-side. Android never stores or transmits the OpenAI key.
+
+## Current host-agent hardening from `main`
+
+The rebuilt branch also inherits the latest desktop/macOS runtime work:
+
+- adaptive observation scheduling;
+- temporal context buffering;
+- perceptual-change detection and ephemeral capture handling;
+- durable agent state and command recovery;
+- offline outbox/retry behavior;
+- device heartbeat and health state;
+- structured logs with redaction;
+- CPU, memory, battery, disk, and network diagnostics;
+- hardened macOS observer and enforcer;
+- native Swift ScreenCaptureKit/Vision helper;
+- macOS development packaging + LaunchAgent scripts;
+- macOS E2E workflow and resilience tests.
+
+These are **host/macOS capabilities**. Their presence in the repository does not imply Android screen observation, Accessibility access, OCR, or enforcement.
+
+---
+
+# Android permission boundary
 
 The Android manifest requests only:
 
@@ -125,21 +121,58 @@ The Android manifest requests only:
 android.permission.INTERNET
 ```
 
-This port does not currently request or implement:
+The mobile port does **not** currently request or implement:
 
 - Accessibility Service access;
-- MediaProjection or continuous screen capture;
+- MediaProjection / continuous screen capture;
 - microphone access;
 - camera access;
 - Notification Listener access;
 - Device Administrator / Device Owner control;
 - real Android application blocking.
 
-That is intentional. Any real Android observation or enforcement must have its own permission model, consent/revocation path, package denylist, Android/Play-policy review, privacy/threat-model update, and release gate.
+Real Android observation/enforcement requires a separate architecture decision and release gate covering consent/revocation, Android management model, protected-package deny rules, tamper resistance, Play-policy implications, privacy/security review, and false-positive handling.
 
 ---
 
-## Android specifications
+# Repository layout
+
+```text
+guardian/
+├── android-app/      native Kotlin + Jetpack Compose family client
+├── agent/            host agent, context, scheduler, outbox, diagnostics, observer/enforcer
+├── api/              FastAPI control plane and SQLite persistence
+├── guardian_core/    shared contracts, policy engine and runtime gates
+├── risk_engine/      context, providers, calibration, pipeline, eval + shadow logic
+├── evals/            synthetic dataset, frozen gates and versioned reports
+├── fixtures/         deterministic controlled demo scenarios
+├── config/           environment and risk-control configuration
+├── native/           optional native macOS capture helper
+├── packaging/        host/macOS packaging assets
+├── docs/             ADRs, runbooks, risk docs, privacy and security material
+├── web/              browser dashboard + controlled demo chat
+├── tests/            shared, risk, resilience and macOS tests
+├── scripts/          bootstrap, demo, checks, evals and packaging helpers
+├── build.gradle.kts  Android plugin versions
+└── settings.gradle.kts
+```
+
+Mobile-specific references:
+
+- [`android-app/README.md`](android-app/README.md)
+- [`docs/adr/0005-android-mobile-client.md`](docs/adr/0005-android-mobile-client.md)
+- [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md)
+
+Upstream host references now inherited:
+
+- [`docs/product/demo-runbook.md`](docs/product/demo-runbook.md)
+- [`docs/product/macos-permissions.md`](docs/product/macos-permissions.md)
+- [`docs/risk/r3-contextual-pipeline.md`](docs/risk/r3-contextual-pipeline.md)
+- [`docs/risk/annotation-guide.md`](docs/risk/annotation-guide.md)
+
+---
+
+# Android specifications
 
 | Item | Specification |
 |---|---|
@@ -150,63 +183,76 @@ That is intentional. Any real Android observation or enforcement must have its o
 | Compose BOM | `2026.06.00` |
 | Activity Compose | `1.10.1` |
 | Android Gradle Plugin | `8.13.2` |
-| Gradle used by CI | `8.13` |
+| Gradle used by Android CI | `8.13` |
 | Java / JVM target | Java 17 |
 | `compileSdk` | 36 |
 | `targetSdk` | 36 |
 | `minSdk` | 26 |
-| Debug transport | Local cleartext HTTP permitted |
+| Debug transport | Cleartext HTTP permitted for local development |
 | Release transport | Cleartext disabled; use HTTPS |
 | Android permissions | `INTERNET` only |
 
-The repository does not currently include a Gradle wrapper. Command-line Android builds therefore expect a compatible `gradle` executable; Android Studio can import the root project directly.
+The repository currently does not include a Gradle wrapper. Command-line Android builds therefore expect a compatible `gradle` executable; Android Studio can import the root Gradle project directly.
 
 ---
 
-# Backend and risk-pipeline dependencies
+# Dependencies
 
-## Required for the deterministic local demo
+## Required for the portable Android demo
+
+### Backend
 
 - Python 3.11+
-- Port `8000` available locally
-- Python dependencies from `requirements.txt` / `pyproject.toml`, including:
+- TCP port `8000`
+- Python packages declared in `requirements.txt`, currently including:
   - `fastapi>=0.115,<1`
   - `uvicorn[standard]>=0.34,<1`
   - `pydantic>=2.10,<3`
-- Android Studio or an Android SDK/JDK/Gradle setup matching the Android specifications above
+  - `pillow>=11,<13`
+  - `psutil>=7,<8`
+  - development/test dependencies including pytest and Ruff
 
-No OpenAI key, cloud database, remote authentication service, or external content is required for the deterministic fixture demo.
+### Android
 
-## Required for all repository quality checks
+- JDK 17
+- Android SDK Platform 36
+- Android build/platform tools required by AGP
+- Gradle 8.13 for command-line builds, or Android Studio with a compatible Gradle setup
 
-The complete `scripts/check.sh` path also uses:
+The deterministic fixture demo needs **no OpenAI key, cloud database, remote authentication service, external content, macOS permission, or elevated Android permission**.
 
-- pytest;
-- Ruff;
-- Node.js 22;
-- pnpm 11.
+## Full repository quality checks
 
-It runs Stage 0 validation, the frozen R3 regression/shadow checks, Python lint/format/tests, and browser JavaScript checks.
+The browser/frontend checks additionally use:
 
-## Optional OpenAI live-demo dependency
+- Node.js 22
+- pnpm 11
 
-The optional host-side one-shot visual demo uses the OpenAI Responses API through `risk_engine/openai.py`.
+## Optional host OpenAI path
 
-It requires:
+The optional one-shot or observation provider path reads:
 
 ```bash
 export OPENAI_API_KEY="..."
 ```
 
-The current default model is configured in the Python provider. The Android application never receives or stores this key and never calls OpenAI directly.
+The key belongs on the Python host only. Do not put it in Android source, Gradle files, application preferences, or APK resources.
 
-The optional live demo is currently macOS-specific because capture uses the macOS observer. The deterministic fixture path remains the official portable fallback.
+## Optional native macOS helper
+
+The synchronized host branch includes `native/GuardianCaptureHelper`:
+
+- Swift tools version 6.0
+- macOS 14+
+- ScreenCaptureKit / Vision-based host capabilities
+
+It is not needed to build or run the Android deterministic demo.
 
 ---
 
 # Recommended local Android demo
 
-This is the most reproducible path and requires no invasive Android permissions or OpenAI credentials.
+This path is portable and reproducible. It keeps all observation/enforcement simulated and requires no provider key.
 
 ## 1. Check out the mobile branch
 
@@ -216,14 +262,14 @@ git switch agent/android-mobile-port
 git pull
 ```
 
-For a fresh clone:
+Fresh clone:
 
 ```bash
 git clone --branch agent/android-mobile-port https://github.com/luqhe/Hackaton-OpenAI-2026.git
 cd Hackaton-OpenAI-2026
 ```
 
-## 2. Bootstrap the backend
+## 2. Bootstrap Python
 
 ### macOS / Linux
 
@@ -237,26 +283,22 @@ bash scripts/bootstrap.sh
 .\scripts\bootstrap.ps1
 ```
 
-This creates `.venv` and installs the Python dependencies.
-
-## 3. Optional: run the risk regression gate
-
-For the R3 risk/evaluation checks only:
+## 3. Optional: validate the current risk regression gate
 
 ```bash
 .venv/bin/python scripts/run_r3_evals.py --check
 ```
 
-For the complete repository checks on macOS/Linux, after installing the Node/pnpm dependencies:
+With Node/pnpm installed, the complete shared check on macOS/Linux is:
 
 ```bash
 pnpm install
 bash scripts/check.sh
 ```
 
-## 4. Start the Guardian API
+## 4. Start FastAPI
 
-In terminal 1:
+Terminal 1:
 
 ### macOS / Linux
 
@@ -270,83 +312,81 @@ bash scripts/run-api.sh
 .\scripts\run-api.ps1
 ```
 
-The standard script listens on:
+The normal development script binds to:
 
 ```text
 http://127.0.0.1:8000
 ```
 
-Useful host-side endpoints:
+Useful host endpoints:
 
-- Guardian browser/debug UI: `http://127.0.0.1:8000`
-- Controlled demo chat: `http://127.0.0.1:8000/demo-chat`
-- OpenAPI: `http://127.0.0.1:8000/docs`
-- Health: `http://127.0.0.1:8000/api/health`
+```text
+http://127.0.0.1:8000
+http://127.0.0.1:8000/api/health
+http://127.0.0.1:8000/docs
+http://127.0.0.1:8000/demo-chat
+```
 
 ## 5. Start an Android Emulator
 
-The mobile app defaults to:
+The app defaults to:
 
 ```text
 http://10.0.2.2:8000
 ```
 
-`10.0.2.2` is the Android Emulator alias for the development computer's loopback interface, so it reaches the API listening on `127.0.0.1:8000`.
+`10.0.2.2` is the emulator alias for the development computer's loopback interface.
 
 ## 6. Build and run Android
 
 ### Android Studio
 
-1. Open the **repository root**.
+1. Open the repository root.
 2. Complete Gradle sync.
 3. Configure JDK 17 and Android SDK Platform 36.
 4. Select the `android-app` application module.
-5. Select the running emulator.
+5. Select the emulator.
 6. Run the app.
 
 ### Command line
-
-With JDK 17, Android SDK 36 and Gradle 8.13 configured:
 
 ```bash
 gradle :android-app:assembleDebug
 ```
 
-The debug APK is produced under:
+APK output:
 
 ```text
 android-app/build/outputs/apk/debug/
 ```
 
-A typical ADB install command is:
+Example install:
 
 ```bash
 adb install -r android-app/build/outputs/apk/debug/android-app-debug.apk
 ```
 
-## 7. Confirm connection
+## 7. Check Android connection
 
-In Guardian Android, open **Conexão** and verify:
+Open **Conexão** in the app and verify:
 
 ```text
-http://10.0.2.2:8000
+API: http://10.0.2.2:8000
 ```
 
-Use the connection check.
-
-For the standard canned demo, keep the app on:
+For the canned fixture demo, select/use:
 
 ```text
 device-demo
 ```
 
-The fixture launcher also targets `device-demo`, which lets the host-side demo agent and Android parent UI refer to the same incident/command stream.
+This intentionally matches the default host-side fixture launcher.
 
-**Parear este Android** is available for device-registration testing, but pairing does not enable Android observation or enforcement.
+**Parear este Android** creates a real Android device record and now sends the conservative Android heartbeat described above, but pairing is not required for the canned demo and does not enable observation or enforcement.
 
-## 8. Trigger the deterministic controlled incident
+## 8. Trigger the deterministic incident
 
-In terminal 2:
+Terminal 2:
 
 ### macOS / Linux
 
@@ -360,26 +400,26 @@ bash scripts/run-demo.sh
 .\scripts\run-demo.ps1
 ```
 
-The agent will:
+The host pipeline will:
 
 1. load `fixtures/dangerous_contact/session.json`;
-2. classify the contextual progression of personal-information requests;
-3. apply the deterministic family policy and runtime gate;
-4. simulate the application block;
-5. persist an incident and minimal evidence;
+2. evaluate contextual risk;
+3. apply the deterministic family policy and runtime gates;
+4. simulate blocking;
+5. persist the incident and minimal evidence;
 6. wait for the parent decision.
 
-## 9. Complete the flow in Android
+## 9. Review on Android
 
-In the Android app:
+In the app:
 
 1. open **Início**;
-2. refresh the dashboard;
-3. select the new incident;
-4. review category, confidence, explanation, and evidence;
+2. tap **Atualizar** if needed;
+3. open the new incident;
+4. review category, confidence, explanation, evidence, and status;
 5. choose **Desbloquear aplicativo** or **Manter bloqueado**.
 
-If you unlock, the backend creates an `UNLOCK_APPLICATION` command. Terminal 2 should eventually print something like:
+On unlock, the backend persists an `UNLOCK_APPLICATION` command. Terminal 2 should eventually show:
 
 ```text
 unlocked=Guardian Demo Chat command=<id>
@@ -390,18 +430,18 @@ That completes the mobile vertical slice:
 ```text
 fixture
   ↓
-shared risk + policy pipeline
+shared risk + calibration + policy pipeline
   ↓
 incident
   ↓
-Android parent review
+Android family review
   ↓
 unlock command
   ↓
-host demo-agent acknowledgement
+host-agent acknowledgement
 ```
 
-## 10. Reset the demo
+## 10. Reset
 
 Stop the API first.
 
@@ -419,45 +459,11 @@ bash scripts/reset-demo.sh
 
 ---
 
-# Optional one-shot visual demo + Android review
+# Physical Android device
 
-The latest upstream `main` also provides an optional macOS live-demo launcher.
+A physical phone cannot use `10.0.2.2`.
 
-This does **not** make Android the observer. The host Mac captures one selected demo frame, classifies it, creates the same Guardian incident, and the Android app can then be used for parent review.
-
-Requirements:
-
-- macOS host;
-- the Guardian API running locally;
-- `OPENAI_API_KEY` for the actual OpenAI classification path;
-- the macOS screen-capture permission required by the observer;
-- controlled synthetic demo content.
-
-Run:
-
-```bash
-bash scripts/run-live-demo.sh
-```
-
-The launcher is explicit about its source/mode and falls back to the deterministic fixture path when the optional live path cannot complete.
-
-The host-side controlled chat is available at:
-
-```text
-http://127.0.0.1:8000/demo-chat
-```
-
-After an incident is created, refresh the Android dashboard and review it exactly like a fixture-generated incident.
-
-See the upstream [`docs/product/demo-runbook.md`](docs/product/demo-runbook.md) for the host/browser presentation flow and [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md) for the Android-adapted version.
-
----
-
-# Running on a physical Android device
-
-A physical phone cannot use `10.0.2.2` to reach the development computer.
-
-Run FastAPI on an address reachable from the phone instead of using `scripts/run-api.sh`:
+Bind FastAPI to a LAN-reachable interface instead of using the default loopback script:
 
 ### macOS / Linux
 
@@ -477,30 +483,51 @@ Then configure **Conexão** with the development computer's LAN address, for exa
 http://192.168.1.50:8000
 ```
 
-Make sure the phone and computer are on the same trusted network and that the host firewall allows TCP port `8000`.
+Requirements:
 
-Debug builds permit local HTTP. Use HTTPS for anything beyond trusted local development.
+- phone and computer on the same trusted network;
+- host firewall allows TCP 8000;
+- wireless client isolation is disabled.
+
+Debug APKs allow local cleartext HTTP. Use HTTPS outside trusted local development.
 
 ---
 
-# Risk evaluation and controls
+# Optional host-side visual/continuous demo
 
-The synchronized branch includes the current R3 evaluation/control assets from `main`:
+The synchronized shared branch now has richer macOS observation paths. Android remains the parent UI.
 
-- `config/risk-controls.v1.json` — calibration curves, category thresholds, kill switches and block approvals;
-- `evals/dataset-manifest.v1.json` — provenance/allowed-use metadata for the synthetic evaluation dataset;
-- `evals/dataset-v1.jsonl` — development/calibration/test contexts;
-- `evals/regression-gate.v1.json` — frozen regression criteria;
-- `evals/results/` — current evaluation and shadow outputs;
-- `scripts/run_r3_evals.py` — reproducible evaluation/check entry point.
+## Controlled one-shot demo
 
-Run:
+On a configured macOS host:
 
 ```bash
-.venv/bin/python scripts/run_r3_evals.py --check
+export OPENAI_API_KEY="..."
+bash scripts/run-live-demo.sh
 ```
 
-These controls are backend concerns. Android displays the resulting incidents and policy state; it does not implement its own calibration or threshold logic.
+The host captures/classifies the selected controlled frame, creates the same incident contract, and Android can review it after refreshing the dashboard.
+
+## Continuous macOS observation
+
+With the required host permissions and configuration, upstream now supports:
+
+```bash
+.venv/bin/python -m agent.main observe
+```
+
+This host path includes adaptive scheduling, context buffering, ephemeral evidence, offline outbox, heartbeat, diagnostics, and recovery behavior.
+
+It does **not** activate Android observation.
+
+Before using macOS capture, read:
+
+- [`docs/product/macos-permissions.md`](docs/product/macos-permissions.md)
+- [`docs/product/demo-runbook.md`](docs/product/demo-runbook.md)
+
+For the Android-adapted presentation path, use:
+
+- [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md)
 
 ---
 
@@ -509,38 +536,57 @@ These controls are backend concerns. Android displays the resulting incidents an
 | Method and route | Mobile use |
 |---|---|
 | `GET /api/health` | Connection check |
-| `GET /api/capabilities` | Server capability disclosure |
+| `GET /api/capabilities` | Capability disclosure |
 | `GET /api/devices/:id` | Device status |
-| `POST /api/devices/pair` | Register an Android device |
+| `POST /api/devices/pair` | Pair/register Android device |
+| `POST /api/devices/:id/heartbeat` | Conservative heartbeat for paired Android records |
 | `GET /api/incidents` | Parent dashboard |
 | `GET /api/incidents/:id` | Incident review |
 | `POST /api/incidents/:id/request-unlock` | Child explanation/review request |
 | `POST /api/incidents/:id/unlock` | Parent unlock decision |
-| `POST /api/incidents/:id/keep-blocked` | Parent keeps the block |
+| `POST /api/incidents/:id/keep-blocked` | Parent keeps block |
 | `GET /api/daily-report` | Parent/child daily summaries |
 | `GET /api/children/:id/policy` | Read family policy |
 | `PUT /api/children/:id/policy` | Update family policy |
 
-The host-side agent additionally consumes:
+Host agent endpoints additionally include incident creation/evidence upload, telemetry, command polling/acknowledgement, and heartbeat state.
 
-| Method and route | Agent use |
-|---|---|
-| `POST /api/incidents` | Persist classified/policy-decided incident |
-| `POST /api/incidents/:id/evidence` | Upload selected minimal evidence |
-| `GET /api/devices/:id/commands` | Poll pending commands |
-| `POST /api/devices/:id/commands/:commandId/ack` | Confirm command execution |
-| `POST /api/devices/:id/telemetry` | Record aggregate telemetry |
+---
+
+# Evaluation and safety controls
+
+Important synchronized assets:
+
+```text
+config/risk-controls.v1.json
+evals/README.md
+evals/dataset-manifest.v1.json
+evals/dataset-v1.jsonl
+evals/regression-gate.v1.json
+evals/results/
+docs/risk/r3-contextual-pipeline.md
+docs/risk/annotation-guide.md
+```
+
+Validate the frozen R3 gate with:
+
+```bash
+.venv/bin/python scripts/run_r3_evals.py --check
+```
+
+These controls stay in Python. Android displays the resulting incident and policy state rather than reimplementing calibration or thresholds.
 
 ---
 
 # CI and validation
 
-Two complementary workflows are kept on the mobile branch:
+This branch intentionally carries multiple validation paths:
 
-- `.github/workflows/ci.yml` — shared Python/web contracts, R3 risk regression, lint, format, and tests inherited from `main`;
-- `.github/workflows/android.yml` — Android debug APK build for `main` / `agent/**` changes that touch the Android project.
+- `.github/workflows/ci.yml` — shared Python/web/R3 checks inherited from `main`;
+- `.github/workflows/macos-e2e.yml` — current host/macOS E2E checks inherited from `main`;
+- `.github/workflows/android.yml` — native Android debug APK build for Android-related changes.
 
-Useful local checks:
+Useful local shared checks:
 
 ```bash
 .venv/bin/python scripts/validate_stage0.py
@@ -549,7 +595,7 @@ Useful local checks:
 .venv/bin/python -m pytest
 ```
 
-With browser tooling installed:
+Browser checks:
 
 ```bash
 pnpm check:js
@@ -557,7 +603,7 @@ pnpm lint:js
 pnpm format:check
 ```
 
-Android:
+Android build:
 
 ```bash
 gradle :android-app:assembleDebug
@@ -565,37 +611,27 @@ gradle :android-app:assembleDebug
 
 ---
 
-# Security and privacy boundaries
+# Security and privacy invariants
 
-- `RiskAssessment` does not contain an enforcement action.
-- Family policy and runtime release gates decide device actions after classification.
-- Android does not receive provider/API credentials.
-- OpenAI is optional and host-side only in the current mobile port.
-- The deterministic fixture demo remains local and requires no external service.
-- Remote/provider failures must not silently become new blocks.
-- Evidence is incident-scoped and size/type constrained by the API.
-- Debug cleartext transport exists only for local development; release Android builds disable it.
-- Android observation and real enforcement remain disabled.
-- No microphone or camera collection is enabled by this port.
+- `RiskAssessment` contains no enforcement action.
+- Deterministic family policy and runtime gates decide actions after classification.
+- Android never receives OpenAI/provider credentials.
+- Provider or network failure must not silently create a new block.
+- Evidence remains incident-scoped and API size/type constrained.
+- Host observation now has stronger ephemeral/recovery behavior, but that does not expand Android collection.
+- Android release builds disable cleartext transport.
+- Android screen capture, Accessibility, microphone, camera, and real enforcement remain disabled.
+- Device heartbeat is not used to claim capabilities the Android app does not have.
 
-This MVP is not production compliance. Deployment involving minors still requires authentication and authorization, family/tenant isolation, encryption and key management, retention/deletion guarantees, consent/guardian flows, LGPD/COPPA review, tamper resistance, auditability, notification design, and formal false-positive/false-negative evaluation.
+This hackathon MVP is not production compliance. Real deployment involving minors still requires authentication/authorization, family and tenant isolation, encryption/key management, retention/deletion guarantees, guardian consent, LGPD/COPPA review, tamper resistance, auditable controls, push/notification design, and formal false-positive/false-negative evaluation.
 
 ---
 
 # Known limitations
 
-- Android currently acts as the native family UI/control client, not the observation/enforcement agent.
-- The optional real screenshot demo is macOS-specific.
-- The OpenAI provider is optional; the deterministic fixture path remains the reproducible baseline.
-- Device pairing is registration only and does not activate Android collection.
-- Authentication, push notifications, multiple families, and public deployment are not implemented.
-- The current branch still uses polling for host device commands.
-
-See also:
-
-- [`docs/product/mobile-demo-runbook.md`](docs/product/mobile-demo-runbook.md)
-- [`docs/product/demo-runbook.md`](docs/product/demo-runbook.md)
-- [`docs/adr/0005-android-mobile-client.md`](docs/adr/0005-android-mobile-client.md)
-- [`docs/product/release-gates.md`](docs/product/release-gates.md)
-- [`docs/security/threat-model.md`](docs/security/threat-model.md)
-- [`docs/privacy/data-map.md`](docs/privacy/data-map.md)
+- Android is currently the native family review/control client, not the observation/enforcement agent.
+- The richer observation/native helper stack is macOS-specific.
+- `device-demo` remains the simplest reproducible host-agent target.
+- Pairing an Android device registers it and heartbeats it; it does not activate observation.
+- Authentication, multi-family isolation, push notifications, and public deployment are not implemented.
+- Android visual evidence is summarized by URL availability rather than introducing an image-loader dependency in this slice.
