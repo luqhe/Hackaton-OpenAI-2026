@@ -355,6 +355,7 @@ def test_observe_command_integrates_real_observer_with_pipeline(monkeypatch, tmp
     )
     args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])
     args.state_path = tmp_path / "agent-state.json"
+    args.runtime_state_path = tmp_path / "runtime-state.json"
 
     assert agent_main.run_observer(args) == 0
 
@@ -381,5 +382,6 @@ def test_observe_command_skips_analysis_for_static_screen(monkeypatch, tmp_path)
         lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("static screen must be ignored")),
     )
     args = agent_main.build_parser().parse_args(["observe", "--max-cycles", "1"])
+    args.runtime_state_path = tmp_path / "runtime-state.json"
 
     assert agent_main.run_observer(args) == 0

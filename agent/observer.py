@@ -46,6 +46,7 @@ class MacOSObserver:
         *,
         cooldown_seconds: float = 60,
         change_threshold: int = 8,
+        initial_hash: str | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if platform.system() != "Darwin":
@@ -54,7 +55,7 @@ class MacOSObserver:
             raise ValueError("cooldown_seconds must be positive")
         if not 0 <= change_threshold <= 64:
             raise ValueError("change_threshold must be between 0 and 64")
-        self._last_hash: str | None = None
+        self._last_hash = initial_hash
         self._cooldown_seconds = cooldown_seconds
         self._change_threshold = change_threshold
         self._clock = clock

@@ -14,6 +14,7 @@ from agent.enforcer import DemoEnforcer, MacOSEnforcer
 from agent.evidence import EphemeralCapture, build_minimal_png
 from agent.observer import MacOSObserver, ObserverPermissionError
 from agent.scheduler import AdaptiveObservationSchedule
+from agent.state import AgentStateStore
 from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
 from guardian_core.models import (
@@ -222,7 +223,12 @@ def run_observer(args: argparse.Namespace) -> int:
     """Run the adaptive real-screen observation loop on macOS."""
     settings = GuardianSettings.from_env()
     client = GuardianAPIClient(args.api_url)
-    observer = MacOSObserver(change_threshold=args.change_threshold)
+    state_store = AgentStateStore(args.runtime_state_path)
+    runtime_state = state_store.load()
+    observer = MacOSObserver(
+        change_threshold=args.change_threshold,
+        initial_hash=runtime_state.last_screen_hash,
+    )
     enforcer = build_enforcer(args.real_enforcement, args.state_path, settings)
     context = ObservationContextBuffer()
     schedule = AdaptiveObservationSchedule(
@@ -241,6 +247,11 @@ def run_observer(args: argparse.Namespace) -> int:
                 print(f"observation=STATIC next_in={next_interval:.1f}")
             else:
                 screenshot_path, screen_hash = captured
+                runtime_state = runtime_state.update(
+                    session_id=args.session_id,
+                    last_screen_hash=screen_hash,
+                )
+                state_store.save(runtime_state)
                 application = observer.get_active_application()
                 observation = Observation(app_name=application, screen_hash=screen_hash)
                 context.add(observation, session_id=args.session_id)
@@ -373,6 +384,11 @@ def build_parser() -> argparse.ArgumentParser:
     observe.add_argument("--device-id", default="device-demo")
     observe.add_argument("--session-id", default="interactive")
     observe.add_argument("--state-path", type=Path, default=PROJECT_ROOT / ".data" / "agent-state.json")
+    observe.add_argument(
+        "--runtime-state-path",
+        type=Path,
+        default=PROJECT_ROOT / ".data" / "runtime-state.json",
+    )
     observe.add_argument("--openai-timeout", type=float, default=20)
     observe.add_argument("--minimum-interval", type=float, default=10)
     observe.add_argument("--maximum-interval", type=float, default=60)
