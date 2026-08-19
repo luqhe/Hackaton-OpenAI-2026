@@ -8,3 +8,13 @@ __pycache__/
 .env
 node_modules/
 .DS_Store
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+*.iml
+.idea/
+captures/
+.externalNativeBuild/
+.cxx/
