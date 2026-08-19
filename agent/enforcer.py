@@ -73,6 +73,8 @@ class MacOSEnforcer(DemoEnforcer):
 
     def _quit(self, application: str) -> None:
         self._assert_allowed(application)
+        if not self._is_running(application):
+            return
         escaped = application.replace("\\", "\\\\").replace('"', '\\"')
         script = f'tell application "{escaped}" to quit'
         subprocess.run(
@@ -82,6 +84,25 @@ class MacOSEnforcer(DemoEnforcer):
             text=True,
             timeout=5,
         )
+
+    def _is_running(self, application: str) -> bool:
+        self._assert_allowed(application)
+        escaped = application.replace("\\", "\\\\").replace('"', '\\"')
+        script = (
+            'tell application "System Events" to return '
+            f'(exists application process whose name is "{escaped}")'
+        )
+        try:
+            result = subprocess.run(
+                ["osascript", "-e", script],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=5,
+            )
+        except (OSError, subprocess.TimeoutExpired):
+            return False
+        return result.returncode == 0 and result.stdout.strip().lower() == "true"
 
     def block(self, application: str) -> None:
         super().block(application)

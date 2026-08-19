@@ -1,8 +1,10 @@
 import json
+from types import SimpleNamespace
 
 import pytest
 
-from agent.enforcer import DemoEnforcer
+import agent.enforcer as enforcer_module
+from agent.enforcer import DemoEnforcer, MacOSEnforcer
 
 
 def test_demo_enforcer_persists_block_state(tmp_path) -> None:
@@ -20,3 +22,45 @@ def test_demo_enforcer_refuses_essential_application(tmp_path) -> None:
     enforcer = DemoEnforcer(tmp_path / "state.json")
     with pytest.raises(ValueError):
         enforcer.block("Finder")
+
+
+def test_macos_enforcer_reapplies_quit_when_blocked_app_reopens(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(enforcer_module.platform, "system", lambda: "Darwin")
+    running_states = iter(["true\n", "true\n"])
+    quit_calls = []
+
+    def fake_run(command, **kwargs):
+        script = command[-1]
+        if "exists application process" in script:
+            return SimpleNamespace(returncode=0, stdout=next(running_states))
+        quit_calls.append(script)
+        return SimpleNamespace(returncode=0, stdout="")
+
+    monkeypatch.setattr(enforcer_module.subprocess, "run", fake_run)
+    enforcer = MacOSEnforcer(tmp_path / "state.json", {"Guardian Demo Chat"})
+
+    enforcer.block("Guardian Demo Chat")
+    enforcer.enforce()
+
+    assert quit_calls == [
+        'tell application "Guardian Demo Chat" to quit',
+        'tell application "Guardian Demo Chat" to quit',
+    ]
+
+
+def test_macos_enforcer_does_not_activate_closed_application(monkeypatch, tmp_path) -> None:
+    monkeypatch.setattr(enforcer_module.platform, "system", lambda: "Darwin")
+    scripts = []
+
+    def fake_run(command, **kwargs):
+        scripts.append(command[-1])
+        return SimpleNamespace(returncode=0, stdout="false\n")
+
+    monkeypatch.setattr(enforcer_module.subprocess, "run", fake_run)
+    enforcer = MacOSEnforcer(tmp_path / "state.json", {"Guardian Demo Chat"})
+
+    enforcer.block("Guardian Demo Chat")
+    enforcer.enforce()
+
+    assert len(scripts) == 2
+    assert all("exists application process" in script for script in scripts)

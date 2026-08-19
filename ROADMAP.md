@@ -150,7 +150,7 @@ As etapas de experiência do usuário, compliance e operação devem avançar em
 
 - [x] `R1-15` Integrar observer real ao `agent.main`.
 - [x] `R1-16` Executar a política somente após validação do assessment.
-- [ ] `R1-17` Implementar monitor de reabertura de app bloqueado.
+- [x] `R1-17` Implementar monitor de reabertura de app bloqueado.
 - [ ] `R1-18` Preservar denylist permanente de processos essenciais.
 - [ ] `R1-19` Persistir estado local para reinício e operação offline.
 - [ ] `R1-20` Implementar fila local de incidentes e telemetria durante indisponibilidade da API.
