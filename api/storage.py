@@ -255,9 +255,16 @@ class GuardianStore:
             if cursor.rowcount == 0:
                 raise KeyError(device_id)
 
-    def record_heartbeat(self, device_id: str, heartbeat: DeviceHeartbeat) -> Device:
+    def record_heartbeat(
+        self,
+        device_id: str,
+        heartbeat: DeviceHeartbeat,
+        *,
+        fresh: bool = True,
+    ) -> Device:
         healthy = (
-            heartbeat.screen_recording_permission
+            fresh
+            and heartbeat.screen_recording_permission
             and heartbeat.accessibility_permission
             and heartbeat.observer_healthy
         )

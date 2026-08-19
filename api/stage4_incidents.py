@@ -5,7 +5,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from typing import Literal
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field
 
 from guardian_core.family_incidents import FamilyIncidentService
@@ -50,10 +50,12 @@ def build_stage4_router(
     service: FamilyIncidentService,
     *,
     clock: Callable[[], datetime] = _utc_now,
+    authorize: Callable[[], None] | None = None,
 ) -> APIRouter:
     """Compose Stage 4 HTTP endpoints around an injected domain service."""
 
-    router = APIRouter()
+    dependencies = [Depends(authorize)] if authorize is not None else []
+    router = APIRouter(dependencies=dependencies)
 
     @router.get("/api/incidents/{incident_id}/experience")
     def incident_experience(incident_id: str) -> dict:

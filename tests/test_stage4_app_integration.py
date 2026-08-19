@@ -1,8 +1,9 @@
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 
 from fastapi.testclient import TestClient
 
 from api.main import create_app
+from guardian_core.config import GuardianSettings
 
 
 def _incident_payload() -> dict:
@@ -222,3 +223,59 @@ def test_family_cannot_expand_blocking_without_an_explicit_release_gate(tmp_path
 
     assert response.status_code == 409
     assert response.json()["detail"] == "Blocking requires an approved category release gate"
+
+
+def test_in_memory_stage4_routes_fail_closed_outside_local_preview(tmp_path) -> None:
+    settings = GuardianSettings.from_env(
+        {
+            "GUARDIAN_ENVIRONMENT": "staging",
+            "GUARDIAN_API_URL": "https://guardian.example",
+            "GUARDIAN_DB_PATH": str(tmp_path / "guardian.db"),
+            "GUARDIAN_EVIDENCE_DIR": str(tmp_path / "evidence"),
+            "GUARDIAN_AUTOMATIC_BLOCKING_ENABLED": "false",
+            "GUARDIAN_REAL_ENFORCEMENT_ENABLED": "false",
+            "GUARDIAN_RELEASE_GATE_APPROVED": "false",
+        }
+    )
+    app = create_app(settings=settings)
+
+    with TestClient(app) as client:
+        responses = (
+            client.post(
+                "/api/onboarding/families",
+                json={"email": "parent@example.com", "family_name": "Família"},
+            ),
+            client.get("/api/family/scope"),
+            client.get("/api/incidents/unknown/experience"),
+        )
+
+    assert {response.status_code for response in responses} == {503}
+    assert {response.json()["detail"] for response in responses} == {
+        "Stage 4 preview requires the authenticated Stage 2 identity layer"
+    }
+
+
+def test_legacy_heartbeat_rejects_future_time_and_never_protects_when_stale(tmp_path) -> None:
+    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    now = datetime.now(UTC)
+    payload = {
+        "agent_version": "0.1.0",
+        "screen_recording_permission": True,
+        "accessibility_permission": True,
+        "observer_healthy": True,
+        "offline_queue_depth": 0,
+    }
+
+    with TestClient(app) as client:
+        future = client.post(
+            "/api/devices/device-demo/heartbeat",
+            json={**payload, "observed_at": (now + timedelta(minutes=5)).isoformat()},
+        )
+        stale = client.post(
+            "/api/devices/device-demo/heartbeat",
+            json={**payload, "observed_at": (now - timedelta(minutes=10)).isoformat()},
+        )
+
+    assert future.status_code == 422
+    assert stale.status_code == 200
+    assert stale.json()["protection_status"] == "DEGRADED"

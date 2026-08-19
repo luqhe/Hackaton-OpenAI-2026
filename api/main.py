@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import sqlite3
 from contextlib import asynccontextmanager
-from datetime import date, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 
 from fastapi import Body, FastAPI, HTTPException, Query, Request, Response, status
@@ -151,12 +151,33 @@ def create_app(
             NotificationPreferences(enabled=True, channel=preferred),
         )
 
-    app.include_router(create_stage4_onboarding_router(family_experience))
-    app.include_router(build_stage4_router(incident_experience))
+    def require_local_stage4_preview() -> None:
+        if runtime_settings.environment not in {"development", "test"}:
+            raise HTTPException(
+                status_code=503,
+                detail="Stage 4 preview requires the authenticated Stage 2 identity layer",
+            )
+
+    def current_preview_family_id() -> str:
+        require_local_stage4_preview()
+        return "family-demo"
+
+    app.include_router(
+        create_stage4_onboarding_router(
+            family_experience,
+            authorize=require_local_stage4_preview,
+        )
+    )
+    app.include_router(
+        build_stage4_router(
+            incident_experience,
+            authorize=require_local_stage4_preview,
+        )
+    )
     app.include_router(
         create_stage4_family_router(
             family_reporting,
-            current_family_id=lambda: "family-demo",
+            current_family_id=current_preview_family_id,
             notification_channels_changed=configure_notification_outbox,
         )
     )
@@ -263,15 +284,22 @@ def create_app(
 
     @app.post("/api/devices/{device_id}/heartbeat", response_model=Device)
     def record_heartbeat(device_id: str, payload: DeviceHeartbeat) -> Device:
+        received_at = datetime.now(UTC)
+        if payload.observed_at.tzinfo is None or payload.observed_at.utcoffset() is None:
+            raise HTTPException(status_code=422, detail="Heartbeat timestamp must include a timezone")
+        if payload.observed_at > received_at + timedelta(seconds=30):
+            raise HTTPException(status_code=422, detail="Heartbeat timestamp is in the future")
+        fresh = received_at - payload.observed_at <= timedelta(minutes=3)
         try:
-            device = store.record_heartbeat(device_id, payload)
+            device = store.record_heartbeat(device_id, payload, fresh=fresh)
         except KeyError:
             raise HTTPException(status_code=404, detail="Device not found") from None
         heartbeat_cache[device_id] = payload
         incident_experience.set_device_online(
             device_id,
             online=(
-                payload.screen_recording_permission
+                fresh
+                and payload.screen_recording_permission
                 and payload.accessibility_permission
                 and payload.observer_healthy
             ),

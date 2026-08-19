@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Callable
 from datetime import datetime
 
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from guardian_core.family_experience import (
@@ -86,8 +87,17 @@ class HeartbeatRequest(BaseModel):
     permissions: dict[PermissionName, PermissionState]
 
 
-def create_stage4_onboarding_router(service: FamilyExperienceService) -> APIRouter:
-    router = APIRouter(prefix="/api/onboarding", tags=["family-onboarding"])
+def create_stage4_onboarding_router(
+    service: FamilyExperienceService,
+    *,
+    authorize: Callable[[], None] | None = None,
+) -> APIRouter:
+    dependencies = [Depends(authorize)] if authorize is not None else []
+    router = APIRouter(
+        prefix="/api/onboarding",
+        tags=["family-onboarding"],
+        dependencies=dependencies,
+    )
 
     @router.post("/families", response_model=AccountFamily, status_code=status.HTTP_201_CREATED)
     def create_family(payload: SignupRequest) -> AccountFamily:
