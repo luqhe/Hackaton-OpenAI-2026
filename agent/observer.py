@@ -1,15 +1,43 @@
 from __future__ import annotations
 
-import hashlib
 import platform
 import subprocess
 import time
 from collections.abc import Callable
 from pathlib import Path
 
+from PIL import Image
+
 
 class ObserverPermissionError(RuntimeError):
     """The observer cannot proceed until macOS permissions are restored."""
+
+
+class PerceptualHash:
+    """Compact average hash for detecting meaningful visual changes."""
+
+    SIZE = 8
+
+    @classmethod
+    def from_image(cls, screenshot_path: Path) -> str:
+        with Image.open(screenshot_path) as image:
+            pixels = list(
+                image.convert("L")
+                .resize(
+                    (cls.SIZE, cls.SIZE),
+                    Image.Resampling.LANCZOS,
+                )
+                .tobytes()
+            )
+        average = sum(pixels) / len(pixels)
+        value = 0
+        for pixel in pixels:
+            value = (value << 1) | int(pixel >= average)
+        return f"{value:0{cls.SIZE * cls.SIZE // 4}x}"
+
+    @staticmethod
+    def distance(first: str, second: str) -> int:
+        return (int(first, 16) ^ int(second, 16)).bit_count()
 
 
 class MacOSObserver:
@@ -17,14 +45,18 @@ class MacOSObserver:
         self,
         *,
         cooldown_seconds: float = 60,
+        change_threshold: int = 8,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
         if platform.system() != "Darwin":
             raise RuntimeError("The real observer is available only on macOS")
         if cooldown_seconds <= 0:
             raise ValueError("cooldown_seconds must be positive")
+        if not 0 <= change_threshold <= 64:
+            raise ValueError("change_threshold must be between 0 and 64")
         self._last_hash: str | None = None
         self._cooldown_seconds = cooldown_seconds
+        self._change_threshold = change_threshold
         self._clock = clock
         self._unavailable_until = 0.0
 
@@ -84,7 +116,9 @@ class MacOSObserver:
         return result.stdout.strip()
 
     def detect_change(self, screenshot_path: Path) -> tuple[bool, str]:
-        digest = hashlib.sha256(screenshot_path.read_bytes()).hexdigest()
-        changed = digest != self._last_hash
+        digest = PerceptualHash.from_image(screenshot_path)
+        changed = self._last_hash is None or (
+            PerceptualHash.distance(digest, self._last_hash) > self._change_threshold
+        )
         self._last_hash = digest
         return changed, digest

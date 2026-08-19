@@ -2,9 +2,10 @@ from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
+from PIL import Image
 
 import agent.observer as observer_module
-from agent.observer import MacOSObserver, ObserverPermissionError
+from agent.observer import MacOSObserver, ObserverPermissionError, PerceptualHash
 
 
 def build_observer(monkeypatch, *, clock, cooldown_seconds=60):
@@ -55,3 +56,33 @@ def test_reset_after_wake_rearms_permission_probe(monkeypatch, tmp_path: Path) -
     observer.reset_after_wake()
 
     assert observer.capture_screen(tmp_path / "frame.png") == tmp_path / "frame.png"
+
+
+def test_perceptual_hash_ignores_png_encoding_differences(monkeypatch, tmp_path: Path) -> None:
+    observer = build_observer(monkeypatch, clock=lambda: 0.0)
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    image = Image.new("RGB", (80, 80), color=(32, 64, 96))
+    image.save(first, compress_level=0)
+    image.save(second, compress_level=9)
+
+    assert observer.detect_change(first)[0] is True
+    assert observer.detect_change(second)[0] is False
+
+
+def test_perceptual_hash_detects_meaningful_layout_change(monkeypatch, tmp_path: Path) -> None:
+    observer = build_observer(monkeypatch, clock=lambda: 0.0, cooldown_seconds=60)
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    Image.new("L", (80, 80), color=255).save(first)
+    changed = Image.new("L", (80, 80), color=255)
+    for x in range(40):
+        for y in range(80):
+            changed.putpixel((x, y), 0)
+    changed.save(second)
+
+    _, first_hash = observer.detect_change(first)
+    is_changed, second_hash = observer.detect_change(second)
+
+    assert is_changed is True
+    assert PerceptualHash.distance(first_hash, second_hash) > 8
