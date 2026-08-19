@@ -54,6 +54,7 @@ class PilotMetricsSummary(BaseModel):
     contested_incidents: int
     contestation_rate: float = Field(ge=0, le=1)
     survey_responses: int
+    unique_families: int
     intervention_comprehension_mean: float | None = Field(default=None, ge=1, le=5)
     guardian_confidence_mean: float | None = Field(default=None, ge=1, le=5)
     feedback_suppressed: bool
@@ -82,6 +83,35 @@ def _category_metrics(records: list[ClassificationOutcome]) -> dict[str, dict[st
     return result
 
 
+def _deduplicate_outcomes(records: list[ClassificationOutcome]) -> list[ClassificationOutcome]:
+    unique: dict[str, ClassificationOutcome] = {}
+    for record in records:
+        previous = unique.get(record.event_id)
+        if previous is not None and previous != record:
+            raise ValueError(f"Conflicting classification outcome for event_id={record.event_id}")
+        unique[record.event_id] = record
+    return list(unique.values())
+
+
+def _deduplicate_surveys(records: list[FamilyPilotSurvey]) -> list[FamilyPilotSurvey]:
+    by_response: dict[str, FamilyPilotSurvey] = {}
+    for record in records:
+        previous = by_response.get(record.response_id)
+        if previous is not None and previous != record:
+            raise ValueError(f"Conflicting family survey for response_id={record.response_id}")
+        by_response[record.response_id] = record
+
+    latest_by_family: dict[str, FamilyPilotSurvey] = {}
+    for record in by_response.values():
+        previous = latest_by_family.get(record.family_subject_digest)
+        if previous is None or (record.submitted_at, record.response_id) > (
+            previous.submitted_at,
+            previous.response_id,
+        ):
+            latest_by_family[record.family_subject_digest] = record
+    return list(latest_by_family.values())
+
+
 def summarize_pilot_metrics(
     cohort_id: str,
     outcomes: list[ClassificationOutcome],
@@ -91,8 +121,8 @@ def summarize_pilot_metrics(
 ) -> PilotMetricsSummary:
     if minimum_feedback_sample < 2:
         raise ValueError("minimum_feedback_sample must be at least 2")
-    cohort_outcomes = [record for record in outcomes if record.cohort_id == cohort_id]
-    cohort_surveys = [survey for survey in surveys if survey.cohort_id == cohort_id]
+    cohort_outcomes = _deduplicate_outcomes([record for record in outcomes if record.cohort_id == cohort_id])
+    cohort_surveys = _deduplicate_surveys([survey for survey in surveys if survey.cohort_id == cohort_id])
     reviewed_flagged = [
         record for record in cohort_outcomes if record.model_flagged and record.human_reviewed
     ]
@@ -116,6 +146,7 @@ def summarize_pilot_metrics(
         contested_incidents=contested,
         contestation_rate=contested / len(shown) if shown else 0.0,
         survey_responses=len(cohort_surveys),
+        unique_families=len(cohort_surveys),
         intervention_comprehension_mean=comprehension,
         guardian_confidence_mean=confidence,
         feedback_suppressed=feedback_suppressed,

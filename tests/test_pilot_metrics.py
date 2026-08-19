@@ -114,3 +114,49 @@ def test_feedback_contract_rejects_free_text_and_invalid_outcomes() -> None:
 def test_feedback_sample_floor_is_validated() -> None:
     with pytest.raises(ValueError, match="at least 2"):
         summarize_pilot_metrics("pilot-alert-a", [], [], minimum_feedback_sample=1)
+
+
+def test_retries_do_not_inflate_events_responses_or_families() -> None:
+    event = outcome("idempotent-event", human_confirmed_risk=False, contested=True)
+    responses = surveys(5)
+    summary = summarize_pilot_metrics(
+        "pilot-alert-a",
+        [event, event],
+        responses + [responses[0]],
+    )
+
+    assert summary.classification_events == 1
+    assert summary.false_positives == 1
+    assert summary.contested_incidents == 1
+    assert summary.survey_responses == 5
+    assert summary.unique_families == 5
+
+
+def test_only_latest_response_per_family_contributes_to_feedback() -> None:
+    original = surveys(5)
+    replacement = original[0].model_copy(
+        update={
+            "response_id": "response-0-newer",
+            "submitted_at": NOW.replace(hour=16),
+            "intervention_comprehension": 1,
+            "guardian_confidence": 1,
+        }
+    )
+    summary = summarize_pilot_metrics(
+        "pilot-alert-a",
+        [],
+        original + [replacement],
+    )
+
+    assert summary.survey_responses == 5
+    assert summary.unique_families == 5
+    assert summary.intervention_comprehension_mean == 3.4
+    assert summary.guardian_confidence_mean == 3.4
+
+
+def test_conflicting_duplicate_event_is_rejected() -> None:
+    event = outcome("conflict", human_confirmed_risk=True)
+    conflicting = event.model_copy(update={"human_confirmed_risk": False})
+
+    with pytest.raises(ValueError, match="Conflicting classification outcome"):
+        summarize_pilot_metrics("pilot-alert-a", [event, conflicting], [])
