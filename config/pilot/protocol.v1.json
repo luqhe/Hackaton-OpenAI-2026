@@ -1,0 +1,64 @@
+{
+  "schema_version": 1,
+  "roadmap_id": "R5-01",
+  "status": "DRAFT_INTERNAL",
+  "pilot_enabled": false,
+  "initial_mode": "TECHNICAL_TELEMETRY_AND_SHADOW_ONLY",
+  "cohort": {
+    "kind": "INVITED_AND_SUPERVISED",
+    "maximum_families": 10,
+    "test_window_minutes": 120
+  },
+  "required_entry_gates": [
+    "IDENTITY_AND_TENANT_ISOLATION",
+    "DEVICE_AUTHENTICATION_AND_REVOCATION",
+    "PRIVATE_EVIDENCE_STORAGE",
+    "VERIFIED_FAMILY_DELETION",
+    "RECORDED_LEGAL_AND_PRIVACY_APPROVALS",
+    "TRAINED_SUPPORT_ROSTER",
+    "ACTIVE_ON_CALL_ROSTER"
+  ],
+  "support_targets_minutes": {
+    "SEV0": 5,
+    "SEV1": 15,
+    "SEV2": 240,
+    "SEV3": 1440
+  },
+  "interruption_conditions": [
+    {
+      "id": "PILOT-STOP-01",
+      "severity": "SEV0",
+      "signal": "suspected cross-family access or evidence disclosure",
+      "action": "STOP_ALL_COLLECTION_AND_REVOKE_ACCESS",
+      "restart_requires": ["SECURITY", "PRIVACY", "ENGINEERING"]
+    },
+    {
+      "id": "PILOT-STOP-02",
+      "severity": "SEV0",
+      "signal": "collection of microphone, camera, or continuous raw screen data",
+      "action": "STOP_ALL_COLLECTION_AND_PRESERVE_TECHNICAL_LOGS",
+      "restart_requires": ["SECURITY", "PRIVACY", "PRODUCT_SAFETY"]
+    },
+    {
+      "id": "PILOT-STOP-03",
+      "severity": "SEV1",
+      "signal": "unlock command p95 above 5 seconds for two consecutive windows",
+      "action": "DISABLE_INTERVENTIONS_AND_KEEP_SHADOW_ONLY",
+      "restart_requires": ["ENGINEERING", "ON_CALL"]
+    },
+    {
+      "id": "PILOT-STOP-04",
+      "severity": "SEV1",
+      "signal": "agent health or performance exceeds a release-gate budget",
+      "action": "PAUSE_AFFECTED_COHORT_AND_ROLL_BACK",
+      "restart_requires": ["ENGINEERING", "PRODUCT_SAFETY"]
+    },
+    {
+      "id": "PILOT-STOP-05",
+      "severity": "SEV1",
+      "signal": "unexpected block, unavailable kill switch, or failed rollback",
+      "action": "DISABLE_BLOCKING_AND_PAUSE_AFFECTED_COHORT",
+      "restart_requires": ["ENGINEERING", "PRODUCT_SAFETY", "ON_CALL"]
+    }
+  ]
+}
