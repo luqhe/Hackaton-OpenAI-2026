@@ -16,12 +16,35 @@ from agent.observer import MacOSObserver, ObserverPermissionError
 from agent.scheduler import AdaptiveObservationSchedule
 from guardian_core.config import Environment, GuardianSettings
 from guardian_core.gates import apply_runtime_release_gate
-from guardian_core.models import IncidentCreate, Observation, PolicyRule, TelemetryUpdate
+from guardian_core.models import (
+    IncidentCreate,
+    Observation,
+    PolicyDecision,
+    PolicyRule,
+    RiskAssessment,
+    TelemetryUpdate,
+)
 from guardian_core.policy import apply_policy
 from risk_engine import assess_risk
 from risk_engine.openai import OpenAIRiskError, assess_screenshot
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+
+
+def apply_validated_policy(
+    raw_assessment: object,
+    *,
+    client: GuardianAPIClient,
+    child_id: str,
+    settings: GuardianSettings,
+    fixture_input: bool,
+) -> tuple[RiskAssessment, PolicyDecision]:
+    """Validate classifier output before reading or applying any family rule."""
+    assessment = RiskAssessment.model_validate(raw_assessment)
+    rules = [PolicyRule.model_validate(item) for item in client.get_policy(child_id)]
+    decision = apply_policy(assessment, rules)
+    decision = apply_runtime_release_gate(decision, settings, fixture_input=fixture_input)
+    return assessment, decision
 
 
 def load_fixture(path: Path) -> tuple[Observation, str]:
@@ -60,10 +83,13 @@ def run_fixture(args: argparse.Namespace) -> int:
     settings = GuardianSettings.from_env()
     client = GuardianAPIClient(args.api_url)
     observation, transcript = load_fixture(args.fixture)
-    assessment = assess_risk(observation)
-    rules = [PolicyRule.model_validate(item) for item in client.get_policy(args.child_id)]
-    decision = apply_policy(assessment, rules)
-    decision = apply_runtime_release_gate(decision, settings, fixture_input=True)
+    assessment, decision = apply_validated_policy(
+        assess_risk(observation),
+        client=client,
+        child_id=args.child_id,
+        settings=settings,
+        fixture_input=True,
+    )
     print(
         f"assessment={assessment.risk} category={assessment.category} confidence={assessment.confidence:.2f}"
     )
@@ -133,17 +159,15 @@ def run_live_demo(args: argparse.Namespace) -> int:
         application = observer.get_active_application()
         _, screen_hash = observer.detect_change(screenshot_path)
         observation = Observation(app_name=application, screen_hash=screen_hash)
-        assessment = assess_screenshot(
-            screenshot_path,
-            observation,
-            timeout=args.openai_timeout,
-        )
-
-        rules = [PolicyRule.model_validate(item) for item in client.get_policy(args.child_id)]
-        decision = apply_policy(assessment, rules)
-        decision = apply_runtime_release_gate(
-            decision,
-            settings,
+        assessment, decision = apply_validated_policy(
+            assess_screenshot(
+                screenshot_path,
+                observation,
+                timeout=args.openai_timeout,
+            ),
+            client=client,
+            child_id=args.child_id,
+            settings=settings,
             fixture_input=args.controlled_demo,
         )
         print(
@@ -220,14 +244,17 @@ def run_observer(args: argparse.Namespace) -> int:
                 application = observer.get_active_application()
                 observation = Observation(app_name=application, screen_hash=screen_hash)
                 context.add(observation, session_id=args.session_id)
-                assessment = assess_screenshot(
-                    screenshot_path,
-                    observation,
-                    timeout=args.openai_timeout,
+                assessment, decision = apply_validated_policy(
+                    assess_screenshot(
+                        screenshot_path,
+                        observation,
+                        timeout=args.openai_timeout,
+                    ),
+                    client=client,
+                    child_id=args.child_id,
+                    settings=settings,
+                    fixture_input=False,
                 )
-                rules = [PolicyRule.model_validate(item) for item in client.get_policy(args.child_id)]
-                decision = apply_policy(assessment, rules)
-                decision = apply_runtime_release_gate(decision, settings, fixture_input=False)
                 client.record_telemetry(
                     args.device_id,
                     TelemetryUpdate(

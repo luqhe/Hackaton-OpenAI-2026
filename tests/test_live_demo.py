@@ -223,6 +223,31 @@ def test_remote_failure_returns_nonzero_without_incident_or_block(monkeypatch, t
     assert not observer.screenshot_path.exists()
 
 
+def test_invalid_assessment_is_rejected_before_policy(monkeypatch, tmp_path) -> None:
+    events, observer, client, enforcer = configure_live_fakes(monkeypatch, tmp_path, high_assessment())
+    monkeypatch.setattr(
+        agent_main,
+        "assess_screenshot",
+        lambda *args, **kwargs: {
+            "risk": "HIGH",
+            "category": "DANGEROUS_CONTACT",
+            "direction": "CHILD_AS_TARGET",
+            "confidence": 0.99,
+            "evidence": [],
+            "explanation": "invalid because action is classifier-owned",
+            "action": "BLOCK",
+        },
+    )
+
+    with pytest.raises(ValueError, match="action"):
+        agent_main.run_live_demo(live_args(tmp_path))
+
+    assert "policy" not in events
+    assert client.incidents == []
+    assert enforcer.blocked == []
+    assert not observer.screenshot_path.exists()
+
+
 def test_controlled_demo_is_rejected_outside_development(monkeypatch, tmp_path) -> None:
     settings = development_settings(tmp_path, Environment.TEST)
     monkeypatch.setattr(agent_main.GuardianSettings, "from_env", classmethod(lambda cls: settings))
