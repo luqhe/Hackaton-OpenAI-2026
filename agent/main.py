@@ -29,7 +29,14 @@ from guardian_core.models import (
     RiskAssessment,
     TelemetryUpdate,
 )
-from guardian_core.pilot import apply_pilot_rollout, fail_safe_pilot_rollout, load_pilot_rollout
+from guardian_core.pilot import (
+    PilotRolloutConfig,
+    PilotTechnicalTelemetry,
+    apply_pilot_rollout,
+    fail_safe_pilot_rollout,
+    load_pilot_rollout,
+    validate_pilot_technical_telemetry,
+)
 from guardian_core.policy import apply_policy
 from guardian_core.version import APP_VERSION
 from risk_engine import assess_risk
@@ -87,7 +94,9 @@ def reject_invalid_pipeline_output(errors: tuple[str, ...]) -> None:
 def flush_offline_outbox(outbox: PersistentOutbox, client: GuardianAPIClient) -> int:
     def deliver(item: OutboxItem) -> bool:
         try:
-            if item.kind == "TELEMETRY":
+            if item.kind == "PILOT_TELEMETRY":
+                client.record_pilot_telemetry(item.device_id, item.payload)
+            elif item.kind == "TELEMETRY":
                 client.record_telemetry(item.device_id, item.payload)
             else:
                 client.create_incident(item.payload)
@@ -98,18 +107,22 @@ def flush_offline_outbox(outbox: PersistentOutbox, client: GuardianAPIClient) ->
     return outbox.flush(deliver)
 
 
-def record_telemetry_or_queue(
+def record_pilot_telemetry_or_queue(
     client: GuardianAPIClient,
     outbox: PersistentOutbox,
     device_id: str,
     payload: dict[str, object],
+    pilot_config: PilotRolloutConfig,
 ) -> None:
+    telemetry = validate_pilot_technical_telemetry(payload, pilot_config).model_dump(
+        mode="json", exclude_none=True
+    )
     try:
-        client.record_telemetry(device_id, payload)
+        client.record_pilot_telemetry(device_id, telemetry)
     except GuardianAPIError:
-        item = outbox.enqueue("TELEMETRY", device_id, payload)
-        AGENT_LOGGER.event("offline_queue_added", kind="TELEMETRY", item_id=item.id)
-        print(f"offline_queue=TELEMETRY id={item.id}")
+        item = outbox.enqueue("PILOT_TELEMETRY", device_id, telemetry)
+        AGENT_LOGGER.event("offline_queue_added", kind="PILOT_TELEMETRY", item_id=item.id)
+        print(f"offline_queue=PILOT_TELEMETRY id={item.id}")
 
 
 def create_incident_or_queue(
@@ -423,17 +436,17 @@ def run_observer(args: argparse.Namespace) -> int:
                     ),
                     config=pilot_config,
                 )
-                telemetry = TelemetryUpdate(
-                    child_id=args.child_id,
-                    screen_changes=1,
-                    suspicious_events=1 if assessment.risk != "SAFE" else 0,
-                    app_name=application,
-                ).model_dump(mode="json")
-                record_telemetry_or_queue(
+                telemetry = PilotTechnicalTelemetry(
+                    agent_version=APP_VERSION,
+                    offline_queue_depth=len(outbox.items()),
+                    permission_state="GRANTED",
+                ).model_dump(mode="json", exclude_none=True)
+                record_pilot_telemetry_or_queue(
                     client,
                     outbox,
                     args.device_id,
                     telemetry,
+                    pilot_config,
                 )
                 source = (
                     "OPENAI"

@@ -10,7 +10,9 @@ from pathlib import Path
 from typing import Any, Literal
 from uuid import uuid4
 
-OutboxKind = Literal["INCIDENT", "TELEMETRY"]
+from guardian_core.pilot import PilotTechnicalTelemetry
+
+OutboxKind = Literal["INCIDENT", "TELEMETRY", "PILOT_TELEMETRY"]
 
 
 @dataclass(frozen=True, slots=True)
@@ -42,6 +44,10 @@ class PersistentOutbox:
             return ()
 
     def enqueue(self, kind: OutboxKind, device_id: str, payload: dict[str, Any]) -> OutboxItem:
+        if kind == "PILOT_TELEMETRY":
+            payload = PilotTechnicalTelemetry.model_validate(payload).model_dump(
+                mode="json", exclude_none=True
+            )
         queued = list(self.items())
         if len(queued) >= self.maximum_items:
             raise RuntimeError("offline outbox capacity reached")

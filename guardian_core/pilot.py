@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from enum import StrEnum
 from pathlib import Path
+from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
@@ -135,8 +136,38 @@ class PilotActionDecision(BaseModel):
     reason: str
 
 
+class PilotTechnicalTelemetry(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    agent_version: str | None = Field(default=None, min_length=1, max_length=40)
+    api_latency_ms: float | None = Field(default=None, ge=0, le=300_000)
+    battery_impact_percent: float | None = Field(default=None, ge=0, le=100)
+    command_latency_ms: float | None = Field(default=None, ge=0, le=300_000)
+    cpu_percent: float | None = Field(default=None, ge=0, le=100)
+    memory_mb: float | None = Field(default=None, ge=0, le=1_000_000)
+    offline_queue_depth: int | None = Field(default=None, ge=0, le=1000)
+    permission_state: Literal["GRANTED", "DENIED", "DEGRADED", "UNKNOWN"] | None = None
+
+    @model_validator(mode="after")
+    def require_metric(self) -> PilotTechnicalTelemetry:
+        if not self.model_fields_set:
+            raise ValueError("Pilot technical telemetry requires at least one metric")
+        return self
+
+
 def load_pilot_rollout(path: Path) -> PilotRolloutConfig:
     return PilotRolloutConfig.model_validate_json(path.read_text(encoding="utf-8"))
+
+
+def validate_pilot_technical_telemetry(
+    payload: object,
+    config: PilotRolloutConfig,
+) -> PilotTechnicalTelemetry:
+    telemetry = PilotTechnicalTelemetry.model_validate(payload)
+    unsupported = telemetry.model_fields_set - config.technical_telemetry_fields
+    if unsupported:
+        raise ValueError(f"Technical telemetry is not enabled for fields: {sorted(unsupported)}")
+    return telemetry
 
 
 def fail_safe_pilot_rollout() -> PilotRolloutConfig:

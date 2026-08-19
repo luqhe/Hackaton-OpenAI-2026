@@ -28,6 +28,7 @@ from guardian_core.models import (
     RiskLevel,
     TelemetryUpdate,
 )
+from guardian_core.pilot import PilotTechnicalTelemetry
 from guardian_core.version import SCHEMA_VERSION
 
 
@@ -118,6 +119,13 @@ CREATE TABLE IF NOT EXISTS daily_telemetry (
     media_sessions INTEGER NOT NULL DEFAULT 0,
     suspicious_events INTEGER NOT NULL DEFAULT 0,
     PRIMARY KEY (child_id, observed_date)
+);
+
+CREATE TABLE IF NOT EXISTS pilot_technical_telemetry (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL REFERENCES devices(id),
+    observed_at TEXT NOT NULL,
+    payload_json TEXT NOT NULL
 );
 
 CREATE INDEX IF NOT EXISTS idx_incidents_child_occurred
@@ -575,6 +583,17 @@ class GuardianStore:
                     update.media_sessions,
                     update.suspicious_events,
                 ),
+            )
+
+    def record_pilot_telemetry(self, device_id: str, update: PilotTechnicalTelemetry) -> None:
+        self.touch_device(device_id)
+        with self.connect() as connection:
+            connection.execute(
+                """
+                INSERT INTO pilot_technical_telemetry(device_id, observed_at, payload_json)
+                VALUES (?, ?, ?)
+                """,
+                (device_id, _now_iso(), update.model_dump_json(exclude_none=True)),
             )
 
     def daily_report(self, child_id: str, report_date: date) -> DailyReport:

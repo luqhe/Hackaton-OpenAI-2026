@@ -94,6 +94,10 @@ class FakeClient:
         self.events.append("telemetry")
         self.telemetry.append((device_id, payload))
 
+    def record_pilot_telemetry(self, device_id, payload):
+        self.events.append("pilot-telemetry")
+        self.telemetry.append((device_id, payload))
+
     def record_heartbeat(self, device_id, payload):
         self.events.append("heartbeat")
         return {"id": device_id, "protection_status": "PROTECTED"}
@@ -412,7 +416,7 @@ def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monke
     settings = development_settings(tmp_path)
 
     class OfflineClient(FakeClient):
-        def record_telemetry(self, device_id, payload):
+        def record_pilot_telemetry(self, device_id, payload):
             raise GuardianAPIError("offline")
 
         def create_incident(self, payload):
@@ -437,4 +441,10 @@ def test_observe_command_queues_telemetry_and_incident_when_api_is_offline(monke
 
     assert agent_main.run_observer(args) == 0
 
-    assert [item.kind for item in PersistentOutbox(args.outbox_path).items()] == ["TELEMETRY"]
+    queued = PersistentOutbox(args.outbox_path).items()
+    assert [item.kind for item in queued] == ["PILOT_TELEMETRY"]
+    assert queued[0].payload == {
+        "agent_version": agent_main.APP_VERSION,
+        "offline_queue_depth": 0,
+        "permission_state": "GRANTED",
+    }

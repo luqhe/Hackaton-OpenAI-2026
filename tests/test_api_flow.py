@@ -111,6 +111,22 @@ def test_policy_and_daily_report(tmp_path) -> None:
         assert report["total_seconds"] == 120
 
 
+def test_pilot_technical_telemetry_rejects_content_fields(tmp_path) -> None:
+    app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
+    with TestClient(app) as client:
+        accepted = client.post(
+            "/api/devices/device-demo/pilot-telemetry",
+            json={"agent_version": "0.1.0", "permission_state": "GRANTED"},
+        )
+        rejected = client.post(
+            "/api/devices/device-demo/pilot-telemetry",
+            json={"agent_version": "0.1.0", "visible_text": "private"},
+        )
+
+    assert accepted.status_code == 204
+    assert rejected.status_code == 422
+
+
 def test_safe_assessment_cannot_create_incident(tmp_path) -> None:
     app = create_app(tmp_path / "guardian.db", tmp_path / "evidence")
     payload = incident_payload()

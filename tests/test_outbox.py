@@ -1,3 +1,6 @@
+import pytest
+from pydantic import ValidationError
+
 from agent.outbox import PersistentOutbox
 
 
@@ -39,3 +42,21 @@ def test_outbox_has_bounded_capacity(tmp_path) -> None:
         assert "capacity" in str(error)
     else:
         raise AssertionError("bounded outbox accepted too many items")
+
+
+def test_pilot_telemetry_outbox_rejects_content_fields(tmp_path) -> None:
+    outbox = PersistentOutbox(tmp_path / "outbox.json")
+
+    with pytest.raises(ValidationError):
+        outbox.enqueue(
+            "PILOT_TELEMETRY",
+            "device-demo",
+            {"agent_version": "0.1.0", "app_name": "Private Chat"},
+        )
+
+    item = outbox.enqueue(
+        "PILOT_TELEMETRY",
+        "device-demo",
+        {"agent_version": "0.1.0", "permission_state": "GRANTED"},
+    )
+    assert item.payload == {"agent_version": "0.1.0", "permission_state": "GRANTED"}

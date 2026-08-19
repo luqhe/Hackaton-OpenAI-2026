@@ -70,6 +70,9 @@ class GuardianAPIClient:
     def record_telemetry(self, device_id: str, payload: dict[str, Any]) -> None:
         self._request("POST", f"/api/devices/{device_id}/telemetry", payload)
 
+    def record_pilot_telemetry(self, device_id: str, payload: dict[str, Any]) -> None:
+        self._request("POST", f"/api/devices/{device_id}/pilot-telemetry", payload)
+
     def record_heartbeat(self, device_id: str, payload: dict[str, Any]) -> dict[str, Any]:
         return self._request("POST", f"/api/devices/{device_id}/heartbeat", payload)
 

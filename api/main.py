@@ -25,6 +25,7 @@ from guardian_core.models import (
     TelemetryUpdate,
     UnlockRequest,
 )
+from guardian_core.pilot import PilotTechnicalTelemetry
 from guardian_core.version import API_VERSION, APP_VERSION
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
@@ -250,6 +251,14 @@ def create_app(
     def record_telemetry(device_id: str, payload: TelemetryUpdate) -> Response:
         try:
             store.record_telemetry(device_id, payload)
+        except KeyError:
+            raise HTTPException(status_code=404, detail="Device not found") from None
+        return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+    @app.post("/api/devices/{device_id}/pilot-telemetry", status_code=status.HTTP_204_NO_CONTENT)
+    def record_pilot_telemetry(device_id: str, payload: PilotTechnicalTelemetry) -> Response:
+        try:
+            store.record_pilot_telemetry(device_id, payload)
         except KeyError:
             raise HTTPException(status_code=404, detail="Device not found") from None
         return Response(status_code=status.HTTP_204_NO_CONTENT)
